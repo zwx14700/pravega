@@ -19,6 +19,7 @@ import io.pravega.client.stream.EventRead;
 import io.pravega.client.stream.EventWriterConfig;
 import io.pravega.client.stream.ReaderConfig;
 import io.pravega.client.stream.ReinitializationRequiredException;
+import io.pravega.client.stream.TimeDomain;
 import io.pravega.client.stream.mock.MockSegmentStreamFactory;
 import java.nio.ByteBuffer;
 import java.util.Collections;
@@ -261,5 +262,33 @@ public class EventStreamReaderTest {
         assertTrue(reader.getReaders().isEmpty());
         reader.close();
     }
-    
+
+    @Test(timeout = 10000)
+    public void testWatermark() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        MockSegmentStreamFactory segmentStreamFactory = new MockSegmentStreamFactory();
+        Orderer orderer = new Orderer();
+        ReaderGroupStateManager groupState = Mockito.mock(ReaderGroupStateManager.class);
+        EventStreamReaderImpl<byte[]> reader = new EventStreamReaderImpl<byte[]>(segmentStreamFactory,
+                new ByteArraySerializer(),
+                groupState,
+                orderer,
+                clock::get,
+                ReaderConfig.builder().timeDomain(TimeDomain.IngestionTime).build());
+        Segment segment = Segment.fromScopedName("Foo/Bar/0");
+        Mockito.when(groupState.acquireNewSegmentsIfNeeded(0L)).thenReturn(ImmutableMap.of(segment, 0L)).thenReturn(Collections.emptyMap());
+        SegmentOutputStream stream = segmentStreamFactory.createOutputStreamForSegment(segment, segmentSealedCallback, writerConfig);
+        ByteBuffer buffer = writeInt(stream, 1);
+        Mockito.when(groupState.getWatermark()).thenReturn(1L).thenReturn(1L).thenReturn(2L);
+        EventRead<byte[]> eventRead = reader.readNextEvent(0);
+        assertTrue(eventRead.isWatermark());
+        assertNull(eventRead.getEvent());
+        assertEquals(1L, (long) eventRead.getWatermark());
+        assertEquals(buffer, ByteBuffer.wrap(reader.readNextEvent(0).getEvent()));
+        eventRead = reader.readNextEvent(0);
+        assertTrue(eventRead.isWatermark());
+        assertNull(eventRead.getEvent());
+        assertEquals(2L, (long) eventRead.getWatermark());
+        reader.close();
+    }
 }

@@ -39,7 +39,7 @@ public class RedirectedReadResultEntryTests extends ThreadPooledTestSuite {
      * Tests the ability of the ReadResultEntry base class to adjust offsets when instructed so.
      */
     @Test
-    public void testConstructor() {
+    public void testConstructor() throws Exception {
         final long originalOffset = 123;
         final int originalLength = 321;
         final int positiveDelta = 8976;
@@ -48,16 +48,16 @@ public class RedirectedReadResultEntryTests extends ThreadPooledTestSuite {
 
         AssertExtensions.assertThrows(
                 "Constructor allowed changing to a negative offset.",
-                () -> new RedirectedReadResultEntry(baseEntry, -originalOffset - 1, this::illegalGetNext, executorService()),
+                () -> new RedirectedReadResultEntry(baseEntry, -originalOffset - 1, this::illegalGetNext, this::illegalGetWatermark, executorService()),
                 ex -> ex instanceof IllegalArgumentException);
 
         // Adjust up.
-        RedirectedReadResultEntry redirectedEntry = new TestRedirectedReadResultEntry(baseEntry, positiveDelta, this::illegalGetNext, executorService());
+        RedirectedReadResultEntry redirectedEntry = new TestRedirectedReadResultEntry(baseEntry, positiveDelta, this::illegalGetNext, this::illegalGetWatermark, executorService());
         Assert.assertEquals("Unexpected value for getStreamSegmentOffset after up-adjustment.", originalOffset + positiveDelta, redirectedEntry.getStreamSegmentOffset());
         Assert.assertEquals("Unexpected value for getRequestedReadLength after up-adjustment (no change expected).", originalLength, redirectedEntry.getRequestedReadLength());
 
         // Adjust down.
-        redirectedEntry = new TestRedirectedReadResultEntry(baseEntry, negativeDelta, this::illegalGetNext, executorService());
+        redirectedEntry = new TestRedirectedReadResultEntry(baseEntry, negativeDelta, this::illegalGetNext, o -> 42L, executorService());
         Assert.assertEquals("Unexpected value for getStreamSegmentOffset after down-adjustment.", originalOffset + negativeDelta, redirectedEntry.getStreamSegmentOffset());
         Assert.assertEquals("Unexpected value for getRequestedReadLength after down-adjustment (no change expected).", originalLength, redirectedEntry.getRequestedReadLength());
 
@@ -66,8 +66,11 @@ public class RedirectedReadResultEntryTests extends ThreadPooledTestSuite {
         Assert.assertEquals("Unexpected value for getRequestedReadLength.", baseEntry.getRequestedReadLength(), redirectedEntry.getRequestedReadLength());
 
         // getContent will be thoroughly tested in its own unit test.
-        baseEntry.getContent().complete(new ReadResultEntryContents(new ByteArrayInputStream(new byte[1]), 1));
-        Assert.assertEquals("Unexpected result for getContent.", baseEntry.getContent().join(), redirectedEntry.getContent().join());
+        baseEntry.getContent().complete(new ReadResultEntryContents(new ByteArrayInputStream(new byte[1]), 1, -1L));
+        ReadResultEntryContents actualContents = redirectedEntry.getContent().join();
+        Assert.assertEquals("Unexpected length for getContent.", 1, actualContents.getLength());
+        Assert.assertEquals("Unexpected watermark for getContent.", 42L, actualContents.getWatermark());
+        AssertExtensions.assertStreamEquals("Unexpected data for getContent.", new ByteArrayInputStream(new byte[1]), actualContents.getData(), 1);
 
         redirectedEntry.requestContent(Duration.ZERO);
         Assert.assertTrue("BaseEntry.getContent() was not completed when requestContent was invoked.", FutureHelpers.isSuccessful(baseEntry.getContent()));
@@ -82,7 +85,7 @@ public class RedirectedReadResultEntryTests extends ThreadPooledTestSuite {
         FailureReadResultEntry f1 = new FailureReadResultEntry(ReadResultEntryType.Cache, 1, 1, () -> {
             throw new ObjectClosedException(this);
         });
-        RedirectedReadResultEntry e1 = new TestRedirectedReadResultEntry(f1, 0, (o, l) -> f1, executorService());
+        RedirectedReadResultEntry e1 = new TestRedirectedReadResultEntry(f1, 0, (o, l) -> f1, this::illegalGetWatermark, executorService());
         AssertExtensions.assertThrows(
                 "requestContent did not throw when attempting to retry more than once.",
                 () -> e1.requestContent(TIMEOUT),
@@ -92,14 +95,14 @@ public class RedirectedReadResultEntryTests extends ThreadPooledTestSuite {
         FailureReadResultEntry f2 = new FailureReadResultEntry(ReadResultEntryType.Cache, 1, 1, () -> {
             throw new IllegalArgumentException();
         });
-        RedirectedReadResultEntry e2 = new TestRedirectedReadResultEntry(f1, 0, (o, l) -> f2, executorService());
+        RedirectedReadResultEntry e2 = new TestRedirectedReadResultEntry(f1, 0, (o, l) -> f2, this::illegalGetWatermark, executorService());
         AssertExtensions.assertThrows(
                 "requestContent did not throw when an ineligible exception got thrown.",
                 () -> e2.requestContent(TIMEOUT),
                 ex -> ex instanceof IllegalArgumentException);
 
         // Given back another Redirect.
-        RedirectedReadResultEntry e3 = new TestRedirectedReadResultEntry(f1, 0, (o, l) -> e1, executorService());
+        RedirectedReadResultEntry e3 = new TestRedirectedReadResultEntry(f1, 0, (o, l) -> e1, this::illegalGetWatermark, executorService());
         AssertExtensions.assertThrows(
                 "requestContent did not throw when retry yielded another RedirectReadResultEntry.",
                 () -> e3.requestContent(TIMEOUT),
@@ -108,7 +111,7 @@ public class RedirectedReadResultEntryTests extends ThreadPooledTestSuite {
         // Given redirect function fails.
         RedirectedReadResultEntry e4 = new TestRedirectedReadResultEntry(f1, 0, (o, l) -> {
             throw new IntentionalException();
-        }, executorService());
+        }, this::illegalGetWatermark, executorService());
         AssertExtensions.assertThrows(
                 "requestContent did not throw when retry failed.",
                 () -> e4.requestContent(TIMEOUT),
@@ -119,7 +122,7 @@ public class RedirectedReadResultEntryTests extends ThreadPooledTestSuite {
         FailureReadResultEntry f5 = new FailureReadResultEntry(ReadResultEntryType.Cache, 2, 1, () -> requestInvoked.set(true));
         f1.setCompletionCallback(i -> { // Do nothing.
         });
-        RedirectedReadResultEntry e5 = new TestRedirectedReadResultEntry(f1, 1, (o, l) -> f5, executorService());
+        RedirectedReadResultEntry e5 = new TestRedirectedReadResultEntry(f1, 1, (o, l) -> f5, this::illegalGetWatermark, executorService());
         e5.requestContent(TIMEOUT);
         Assert.assertTrue("requestTimeout was not invoked for successful redirect.", requestInvoked.get());
         Assert.assertEquals("Unexpected result from getCompletionCallback after successful redirect.", f5.getCompletionCallback(), f1.getCompletionCallback());
@@ -134,7 +137,7 @@ public class RedirectedReadResultEntryTests extends ThreadPooledTestSuite {
     public void testGetContent() {
         // More than one retry (by design, it will only retry one time; the next time it will simply throw).
         MockReadResultEntry t1 = new MockReadResultEntry(1, 1);
-        RedirectedReadResultEntry e1 = new TestRedirectedReadResultEntry(t1, 0, (o, l) -> t1, executorService());
+        RedirectedReadResultEntry e1 = new TestRedirectedReadResultEntry(t1, 0, (o, l) -> t1, this::illegalGetWatermark, executorService());
         t1.getContent().completeExceptionally(new StreamSegmentNotExistsException("foo"));
         AssertExtensions.assertThrows(
                 "getContent() did not throw when attempting to retry more than once.",
@@ -143,7 +146,7 @@ public class RedirectedReadResultEntryTests extends ThreadPooledTestSuite {
 
         // Ineligible exception.
         MockReadResultEntry t2 = new MockReadResultEntry(1, 1);
-        RedirectedReadResultEntry e2 = new TestRedirectedReadResultEntry(t2, 0, (o, l) -> t2, executorService());
+        RedirectedReadResultEntry e2 = new TestRedirectedReadResultEntry(t2, 0, (o, l) -> t2, this::illegalGetWatermark, executorService());
         t2.getContent().completeExceptionally(new IntentionalException());
         AssertExtensions.assertThrows(
                 "getContent() did not throw when an ineligible exception got thrown.",
@@ -152,7 +155,7 @@ public class RedirectedReadResultEntryTests extends ThreadPooledTestSuite {
 
         // Given back another Redirect.
         MockReadResultEntry t3 = new MockReadResultEntry(1, 1);
-        RedirectedReadResultEntry e3 = new TestRedirectedReadResultEntry(t3, 0, (o, l) -> e1, executorService());
+        RedirectedReadResultEntry e3 = new TestRedirectedReadResultEntry(t3, 0, (o, l) -> e1, this::illegalGetWatermark, executorService());
         t3.getContent().completeExceptionally(new StreamSegmentNotExistsException("foo"));
         AssertExtensions.assertThrows(
                 "getContent() did not throw when a retry yielded another RedirectReadResultEntry.",
@@ -164,7 +167,7 @@ public class RedirectedReadResultEntryTests extends ThreadPooledTestSuite {
         t4.getContent().completeExceptionally(new StreamSegmentNotExistsException("foo"));
         RedirectedReadResultEntry e4 = new TestRedirectedReadResultEntry(t4, 0, (o, l) -> {
             throw new IntentionalException();
-        }, executorService());
+        }, this::illegalGetWatermark, executorService());
         AssertExtensions.assertThrows(
                 "getContent() did not throw when retry failed.",
                 e4::getContent,
@@ -176,8 +179,8 @@ public class RedirectedReadResultEntryTests extends ThreadPooledTestSuite {
         MockReadResultEntry t5Good = new MockReadResultEntry(2, 1);
         t1.setCompletionCallback(i -> { // Do nothing.
         });
-        t5Good.getContent().complete(new ReadResultEntryContents(new ByteArrayInputStream(new byte[1]), 1));
-        RedirectedReadResultEntry e5 = new TestRedirectedReadResultEntry(t5Bad, 1, (o, l) -> t5Good, executorService());
+        t5Good.getContent().complete(new ReadResultEntryContents(new ByteArrayInputStream(new byte[1]), 1, 42L));
+        RedirectedReadResultEntry e5 = new TestRedirectedReadResultEntry(t5Bad, 1, (o, l) -> t5Good, this::illegalGetWatermark, executorService());
         val finalResult = e5.getContent().join();
         Assert.assertEquals("Unexpected result from getCompletionCallback after successful redirect.", t5Bad.getCompletionCallback(), t5Good.getCompletionCallback());
         Assert.assertEquals("Unexpected result from getRequestedReadLength after successful redirect.", t5Bad.getRequestedReadLength(), e5.getRequestedReadLength());
@@ -185,7 +188,37 @@ public class RedirectedReadResultEntryTests extends ThreadPooledTestSuite {
         Assert.assertEquals("Unexpected result from getContent after successful redirect.", t5Good.getContent().join(), finalResult);
     }
 
+    @Test
+    public void testGetWatermark() {
+        // synchronous completion
+        MockReadResultEntry t1 = new MockReadResultEntry(1, 1);
+        t1.getContent().complete(new ReadResultEntryContents(new ByteArrayInputStream(new byte[1]), 1, 41L));
+        RedirectedReadResultEntry e1 = new TestRedirectedReadResultEntry(t1, 0, (o, l) -> t1, o -> 42L, executorService());
+        val r1 = e1.getContent().join();
+        Assert.assertEquals(42L, r1.getWatermark());
+
+        // asynchronous completion
+        MockReadResultEntry t2 = new MockReadResultEntry(1, 1);
+        RedirectedReadResultEntry e2 = new TestRedirectedReadResultEntry(t2, 0, (o, l) -> t1, o -> 42L, executorService());
+        t2.getContent().complete(new ReadResultEntryContents(new ByteArrayInputStream(new byte[1]), 1, 41L));
+        val r2 = e2.getContent().join();
+        Assert.assertEquals(42L, r2.getWatermark());
+
+        // exception in watermark getter
+        MockReadResultEntry t3 = new MockReadResultEntry(1, 1);
+        RedirectedReadResultEntry e3 = new TestRedirectedReadResultEntry(t3, 0, (o, l) -> t1, this::illegalGetWatermark, executorService());
+        t3.getContent().complete(new ReadResultEntryContents(new ByteArrayInputStream(new byte[1]), 1, 41L));
+        AssertExtensions.assertThrows(
+                "getContent() did not throw when retry failed.",
+                e3::getContent,
+                ex -> ex instanceof IllegalStateException);
+    }
+
     private CompletableReadResultEntry illegalGetNext(long offset, int length) {
+        throw new IllegalStateException("Cannot invoke this operation at this time.");
+    }
+
+    private long illegalGetWatermark(long offset) {
         throw new IllegalStateException("Cannot invoke this operation at this time.");
     }
 
@@ -215,8 +248,8 @@ public class RedirectedReadResultEntryTests extends ThreadPooledTestSuite {
     }
 
     private static class TestRedirectedReadResultEntry extends RedirectedReadResultEntry {
-        TestRedirectedReadResultEntry(CompletableReadResultEntry baseEntry, long offsetAdjustment, GetEntry retryGetEntry, ScheduledExecutorService executorService) {
-            super(baseEntry, offsetAdjustment, retryGetEntry, executorService);
+        TestRedirectedReadResultEntry(CompletableReadResultEntry baseEntry, long offsetAdjustment, GetEntry retryGetEntry, GetWatermark getWatermark, ScheduledExecutorService executorService) {
+            super(baseEntry, offsetAdjustment, retryGetEntry, getWatermark, executorService);
         }
 
         @Override

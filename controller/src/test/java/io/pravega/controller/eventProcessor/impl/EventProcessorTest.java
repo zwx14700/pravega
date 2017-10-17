@@ -205,6 +205,16 @@ public class EventProcessorTest {
         public String getCheckpointName() {
             return null;
         }
+
+        @Override
+        public boolean isWatermark() {
+            return false;
+        }
+
+        @Override
+        public Long getWatermark() {
+            return null;
+        }
     }
 
     @Test(timeout = 10000)
@@ -350,6 +360,7 @@ public class EventProcessorTest {
 
         // By now, the events have been written to the Mock EventStreamWriter.
         Integer[] writerList = writer.getEventList().stream()
+                .map(EventRead::getEvent)
                 .map(TestEvent::getNumber)
                 .collect(Collectors.toList()).toArray(new Integer[input.length]);
 

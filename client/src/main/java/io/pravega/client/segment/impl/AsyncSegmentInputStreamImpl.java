@@ -79,6 +79,7 @@ class AsyncSegmentInputStreamImpl extends AsyncSegmentInputStream {
             if (future != null) {
                 future.complete(new WireCommands.SegmentRead(segmentIsSealed.getSegment(),
                         segmentIsSealed.getRequestId(),
+                        Long.MAX_VALUE,
                         true,
                         true,
                         ByteBuffer.allocate(0)));

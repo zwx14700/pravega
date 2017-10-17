@@ -17,16 +17,19 @@ import java.io.InputStream;
 public class ReadResultEntryContents {
     private final int length;
     private final InputStream data;
+    private final long watermark;
 
     /**
      * Creates a new instance of the ReadResultEntryContents class.
      *
      * @param data                The data to retrieve.
      * @param length              The length of the retrieved data.
+     * @param watermark           A watermark representing the exclusive minimum ingestion time of subsequent content.
      */
-    public ReadResultEntryContents(InputStream data, int length) {
+    public ReadResultEntryContents(InputStream data, int length, long watermark) {
         this.data = data;
         this.length = length;
+        this.watermark = watermark;
     }
 
     /**
@@ -43,8 +46,15 @@ public class ReadResultEntryContents {
         return this.data;
     }
 
+    /**
+     * Gets a watermark representing the exclusive minimum ingestion time of subsequent content.
+     */
+    public long getWatermark() {
+        return watermark;
+    }
+
     @Override
     public String toString() {
-        return String.format("Length = %d", getLength());
+        return String.format("Length = %d, Watermark = %d", getLength(), getWatermark());
     }
 }

@@ -32,6 +32,7 @@ import io.pravega.segmentstore.server.logs.operations.OperationFactory;
 import io.pravega.segmentstore.server.logs.operations.ProbeOperation;
 import io.pravega.segmentstore.server.logs.operations.StorageOperation;
 import io.pravega.segmentstore.server.logs.operations.StreamSegmentAppendOperation;
+import io.pravega.segmentstore.server.logs.operations.TemporalOperation;
 import io.pravega.segmentstore.server.reading.CacheManager;
 import io.pravega.segmentstore.server.reading.ContainerReadIndex;
 import io.pravega.segmentstore.server.reading.ReadIndexConfig;
@@ -45,6 +46,7 @@ import io.pravega.segmentstore.storage.Storage;
 import io.pravega.segmentstore.storage.mocks.InMemoryCacheFactory;
 import io.pravega.segmentstore.storage.mocks.InMemoryStorage;
 import io.pravega.test.common.AssertExtensions;
+import io.pravega.test.common.CounterClock;
 import io.pravega.test.common.ErrorInjector;
 import java.io.IOException;
 import java.time.Duration;
@@ -106,7 +108,7 @@ public class OperationProcessorTests extends OperationLogTestBase {
         dataLog.initialize(TIMEOUT);
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, context.stateUpdater,
-                dataLog, getNoOpCheckpointPolicy(), executorService());
+                dataLog, getNoOpCheckpointPolicy(), executorService(), context.clock);
         operationProcessor.startAsync().awaitRunning();
 
         // Process all generated operations.
@@ -156,7 +158,7 @@ public class OperationProcessorTests extends OperationLogTestBase {
         dataLog.initialize(TIMEOUT);
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, context.stateUpdater,
-                dataLog, getNoOpCheckpointPolicy(), executorService());
+                dataLog, getNoOpCheckpointPolicy(), executorService(), context.clock);
         operationProcessor.startAsync().awaitRunning();
 
         // Process all generated operations.
@@ -242,7 +244,7 @@ public class OperationProcessorTests extends OperationLogTestBase {
         dataLog.initialize(TIMEOUT);
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, context.stateUpdater,
-                dataLog, getNoOpCheckpointPolicy(), executorService());
+                dataLog, getNoOpCheckpointPolicy(), executorService(), context.clock);
         operationProcessor.startAsync().awaitRunning();
 
         // Process all generated operations.
@@ -300,7 +302,7 @@ public class OperationProcessorTests extends OperationLogTestBase {
         dataLog.initialize(TIMEOUT);
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, context.stateUpdater,
-                dataLog, getNoOpCheckpointPolicy(), executorService());
+                dataLog, getNoOpCheckpointPolicy(), executorService(), context.clock);
         operationProcessor.startAsync().awaitRunning();
 
         ErrorInjector<Exception> aSyncErrorInjector = new ErrorInjector<>(
@@ -349,7 +351,7 @@ public class OperationProcessorTests extends OperationLogTestBase {
         dataLog.initialize(TIMEOUT);
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, context.stateUpdater,
-                dataLog, getNoOpCheckpointPolicy(), executorService());
+                dataLog, getNoOpCheckpointPolicy(), executorService(), context.clock);
         operationProcessor.startAsync().awaitRunning();
 
         ErrorInjector<Exception> aSyncErrorInjector = new ErrorInjector<>(
@@ -405,7 +407,7 @@ public class OperationProcessorTests extends OperationLogTestBase {
         dataLog.initialize(TIMEOUT);
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, stateUpdater,
-                dataLog, getNoOpCheckpointPolicy(), executorService());
+                dataLog, getNoOpCheckpointPolicy(), executorService(), context.clock);
         operationProcessor.startAsync().awaitRunning();
 
         // Process all generated operations.
@@ -493,7 +495,7 @@ public class OperationProcessorTests extends OperationLogTestBase {
         dataLog.initialize(TIMEOUT);
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, context.stateUpdater,
-                dataLog, getNoOpCheckpointPolicy(), executorService());
+                dataLog, getNoOpCheckpointPolicy(), executorService(), context.clock);
         operationProcessor.startAsync().awaitRunning();
 
         // Process all generated operations.
@@ -527,7 +529,7 @@ public class OperationProcessorTests extends OperationLogTestBase {
         dataLog.initialize(TIMEOUT);
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, context.stateUpdater,
-                dataLog, getNoOpCheckpointPolicy(), executorService());
+                dataLog, getNoOpCheckpointPolicy(), executorService(), context.clock);
         operationProcessor.startAsync().awaitRunning();
 
         // Process all generated operations.
@@ -575,6 +577,11 @@ public class OperationProcessorTests extends OperationLogTestBase {
             Operation expectedOp = oc.operation;
             AssertExtensions.assertGreaterThan("Operations were not assigned sequential Sequence Numbers.", lastSeqNo, expectedOp.getSequenceNumber());
             lastSeqNo = expectedOp.getSequenceNumber();
+
+            // Verify that the operations have been assigned timestamps
+            if (expectedOp instanceof TemporalOperation) {
+                Assert.assertNotEquals(Long.MIN_VALUE, ((TemporalOperation) expectedOp).getTimestamp());
+            }
 
             // MemoryLog: verify that the operations match that of the expected list.
             Assert.assertTrue("No more items left to read from MemoryLog. Expected: " + expectedOp, memoryLogIterator.hasNext());
@@ -624,6 +631,7 @@ public class OperationProcessorTests extends OperationLogTestBase {
     }
 
     private class TestContext implements AutoCloseable {
+        final CounterClock clock;
         final CacheManager cacheManager;
         final Storage storage;
         final SequencedItemList<Operation> memoryLog;
@@ -633,6 +641,7 @@ public class OperationProcessorTests extends OperationLogTestBase {
         final MemoryStateUpdater stateUpdater;
 
         TestContext() {
+            this.clock = new CounterClock();
             this.cacheFactory = new InMemoryCacheFactory();
             this.storage = new InMemoryStorage(executorService());
             this.storage.initialize(1);

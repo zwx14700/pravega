@@ -50,6 +50,10 @@ class SegmentInputStreamImpl implements SegmentInputStream {
     @GuardedBy("$lock")
     private boolean receivedEndOfSegment = false;
     @GuardedBy("$lock")
+    private long bufferedWatermark;
+    @GuardedBy("$lock")
+    private long watermark;
+    @GuardedBy("$lock")
     private CompletableFuture<SegmentRead> outstandingRequest = null;
 
     SegmentInputStreamImpl(AsyncSegmentInputStream asyncInput, long offset) {
@@ -74,6 +78,9 @@ class SegmentInputStreamImpl implements SegmentInputStream {
         this.readLength = Math.min(DEFAULT_READ_LENGTH, bufferSize);
         this.buffer = new CircularBuffer(Math.max(bufferSize, readLength + 1));
 
+        this.bufferedWatermark = Long.MIN_VALUE;
+        this.watermark = Long.MIN_VALUE;
+
         issueRequestIfNeeded();
     }
 
@@ -87,7 +94,8 @@ class SegmentInputStreamImpl implements SegmentInputStream {
             this.offset = offset;
             buffer.clear();
             receivedEndOfSegment = false;
-            outstandingRequest = null;        
+            outstandingRequest = null;
+            watermark = Long.MIN_VALUE;
         }
     }
 
@@ -95,6 +103,12 @@ class SegmentInputStreamImpl implements SegmentInputStream {
     @Synchronized
     public long getOffset() {
         return offset;
+    }
+
+    @Override
+    @Synchronized
+    public long getWatermark() {
+        return watermark;
     }
 
     /**
@@ -123,8 +137,11 @@ class SegmentInputStreamImpl implements SegmentInputStream {
     private ByteBuffer readEventData(long timeout) throws EndOfSegmentException {
         fillBuffer();
         while (buffer.dataAvailable() < WireCommands.TYPE_PLUS_LENGTH_SIZE) {
-            if (buffer.dataAvailable() == 0 && receivedEndOfSegment) {
-                throw new EndOfSegmentException();
+            if (buffer.dataAvailable() == 0) {
+                flushWatermark();
+                if (receivedEndOfSegment) {
+                    throw new EndOfSegmentException();
+                }
             }
             if (FutureHelpers.getAndHandleExceptions(outstandingRequest, e -> issueRequestIfNeeded(), timeout) == null) {
                 return null;
@@ -149,7 +166,17 @@ class SegmentInputStreamImpl implements SegmentInputStream {
             offset += buffer.read(result);
         }
         result.flip();
+        if (buffer.dataAvailable() == 0) {
+            flushWatermark();
+        }
         return result;
+    }
+
+    private void flushWatermark() {
+        if (bufferedWatermark > watermark) {
+            watermark = bufferedWatermark;
+            log.trace("Updated watermark: {}", watermark);
+        }
     }
 
     private boolean dataWaitingToGoInBuffer() {
@@ -166,6 +193,9 @@ class SegmentInputStreamImpl implements SegmentInputStream {
             receivedEndOfSegment = true;
         }
         if (!segmentRead.getData().hasRemaining()) {
+            // the response data has been fully consumed
+            bufferedWatermark = segmentRead.getWatermark();
+            log.trace("Buffered a watermark: {}", bufferedWatermark);
             outstandingRequest = null;
             issueRequestIfNeeded();
         }

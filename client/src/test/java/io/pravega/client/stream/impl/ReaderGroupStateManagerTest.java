@@ -11,6 +11,7 @@ package io.pravega.client.stream.impl;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import io.pravega.client.ClientFactory;
 import io.pravega.client.netty.impl.ConnectionFactory;
@@ -78,6 +79,8 @@ public class ReaderGroupStateManagerTest {
                         ImmutableMap.of(new SegmentWithRange(successorA, 0.0, 0.5), singletonList(0),
                                         new SegmentWithRange(successorB, 0.5, 1.0), singletonList(0))));
         MockSegmentStreamFactory streamFactory = new MockSegmentStreamFactory();
+        streamFactory.getMockStream(successorA);
+        streamFactory.getMockStream(successorB);
         @Cleanup
         ClientFactory clientFactory = new ClientFactoryImpl(scope, controller, connectionFactory, streamFactory,
                 streamFactory, streamFactory);
@@ -91,14 +94,18 @@ public class ReaderGroupStateManagerTest {
         segments.put(initialSegment, 1L);
         ReaderGroupStateManager.initializeReaderGroup(stateSynchronizer,
                 ReaderGroupConfig.builder().build(),
-                segments);
-        val readerState = new ReaderGroupStateManager("testReader", stateSynchronizer, controller, null);
+                segments,
+                ReaderGroupStateManager.getWatermarks(streamFactory, segments));
+        val readerState = new ReaderGroupStateManager("testReader", stateSynchronizer, controller, streamFactory, null);
         readerState.initializeReader(0);
         Map<Segment, Long> newSegments = readerState.acquireNewSegmentsIfNeeded(0);
         assertEquals(1, newSegments.size());
         assertEquals(Long.valueOf(1), newSegments.get(initialSegment));
+        assertEquals(streamFactory.getMockStream(initialSegment).fetchCreationTime() - 1L, readerState.getWatermark());
 
         readerState.handleEndOfSegment(initialSegment);
+        assertEquals(streamFactory.getMockStream(successorA).fetchCreationTime() - 1L, readerState.getWatermark());
+
         newSegments = readerState.acquireNewSegmentsIfNeeded(0);
         assertEquals(2, newSegments.size());
         assertEquals(Long.valueOf(0), newSegments.get(successorA));
@@ -134,23 +141,27 @@ public class ReaderGroupStateManagerTest {
         segments.put(initialSegmentB, 2L);
         ReaderGroupStateManager.initializeReaderGroup(stateSynchronizer,
                                                       ReaderGroupConfig.builder().build(),
-                                                      segments);
-        val readerState = new ReaderGroupStateManager("testReader", stateSynchronizer, controller, null);
+                                                      segments,
+                                                      ReaderGroupStateManager.getWatermarks(streamFactory, segments));
+        val readerState = new ReaderGroupStateManager("testReader", stateSynchronizer, controller, streamFactory, null);
         readerState.initializeReader(0);
         Map<Segment, Long> newSegments = readerState.acquireNewSegmentsIfNeeded(0);
         assertEquals(2, newSegments.size());
         assertEquals(Long.valueOf(1), newSegments.get(initialSegmentA));
         assertEquals(Long.valueOf(2), newSegments.get(initialSegmentB));
-        
+        assertEquals(streamFactory.getMockStream(initialSegmentA).fetchCreationTime() - 1L, readerState.getWatermark());
+
         readerState.handleEndOfSegment(initialSegmentA);
         newSegments = readerState.acquireNewSegmentsIfNeeded(0);
         assertTrue(newSegments.isEmpty());
-        
+        assertEquals(streamFactory.getMockStream(initialSegmentB).fetchCreationTime() - 1L, readerState.getWatermark());
+
         readerState.handleEndOfSegment(initialSegmentB);
         newSegments = readerState.acquireNewSegmentsIfNeeded(0);
         assertEquals(1, newSegments.size());
         assertEquals(Long.valueOf(0), newSegments.get(successor));
-        
+        assertEquals(streamFactory.getMockStream(successor).fetchCreationTime() - 1L, readerState.getWatermark());
+
         newSegments = readerState.acquireNewSegmentsIfNeeded(0);
         assertTrue(newSegments.isEmpty());
     }
@@ -176,10 +187,12 @@ public class ReaderGroupStateManagerTest {
         segments.put(new Segment(scope, stream, 0), 1L);
         ReaderGroupStateManager.initializeReaderGroup(stateSynchronizer,
                                                       ReaderGroupConfig.builder().build(),
-                                                      segments);
+                                                      segments,
+                                                      ReaderGroupStateManager.getWatermarks(streamFactory, segments));
         ReaderGroupStateManager readerState = new ReaderGroupStateManager("testReader",
                 stateSynchronizer,
                 controller,
+                streamFactory,
                 null);
         readerState.initializeReader(0);
         Segment toRelease = readerState.findSegmentToReleaseIfRequired();
@@ -214,10 +227,12 @@ public class ReaderGroupStateManagerTest {
         segments.put(new Segment(scope, stream, 1), 456L);
         ReaderGroupStateManager.initializeReaderGroup(stateSynchronizer,
                                                       ReaderGroupConfig.builder().build(),
-                                                      segments);
+                                                      segments,
+                                                      ReaderGroupStateManager.getWatermarks(streamFactory, segments));
         ReaderGroupStateManager readerState1 = new ReaderGroupStateManager("testReader",
                 stateSynchronizer,
                 controller,
+                streamFactory,
                 clock::get);
         readerState1.initializeReader(0);
         Segment toRelease = readerState1.findSegmentToReleaseIfRequired();
@@ -229,6 +244,7 @@ public class ReaderGroupStateManagerTest {
         ReaderGroupStateManager readerState2 = new ReaderGroupStateManager("testReader2",
                 stateSynchronizer,
                 controller,
+                streamFactory,
                 clock::get);
         readerState2.initializeReader(0);
 
@@ -274,14 +290,15 @@ public class ReaderGroupStateManagerTest {
         segments.put(new Segment(scope, stream, 1), 1L);
         segments.put(new Segment(scope, stream, 2), 2L);
         segments.put(new Segment(scope, stream, 3), 3L);
-        ReaderGroupStateManager.initializeReaderGroup(stateSynchronizer, ReaderGroupConfig.builder().build(), segments);
+        ReaderGroupStateManager.initializeReaderGroup(stateSynchronizer, ReaderGroupConfig.builder().build(), segments,
+                ReaderGroupStateManager.getWatermarks(streamFactory, segments));
 
         ReaderGroupStateManager reader1 = new ReaderGroupStateManager("reader1", stateSynchronizer, controller,
-                clock::get);
+                streamFactory, clock::get);
         reader1.initializeReader(0);
 
         ReaderGroupStateManager reader2 = new ReaderGroupStateManager("reader2", stateSynchronizer, controller,
-                clock::get);
+                streamFactory, clock::get);
         reader2.initializeReader(0);
 
         Map<Segment, Long> segments1 = reader1.acquireNewSegmentsIfNeeded(0);
@@ -351,16 +368,17 @@ public class ReaderGroupStateManagerTest {
         segments.put(new Segment(scope, stream, 3), 3L);
         segments.put(new Segment(scope, stream, 4), 4L);
         segments.put(new Segment(scope, stream, 5), 5L);
-        ReaderGroupStateManager.initializeReaderGroup(stateSynchronizer, ReaderGroupConfig.builder().build(), segments);
+        ReaderGroupStateManager.initializeReaderGroup(stateSynchronizer, ReaderGroupConfig.builder().build(), segments,
+                ReaderGroupStateManager.getWatermarks(streamFactory, segments));
 
         ReaderGroupStateManager reader1 = new ReaderGroupStateManager("reader1", stateSynchronizer, controller,
-                clock::get);
+                streamFactory, clock::get);
         reader1.initializeReader(0);
         Map<Segment, Long> segments1 = reader1.acquireNewSegmentsIfNeeded(0);
         assertEquals(6, segments1.size());
 
         ReaderGroupStateManager reader2 = new ReaderGroupStateManager("reader2", stateSynchronizer, controller,
-                clock::get);
+                streamFactory, clock::get);
         reader2.initializeReader(0);
         assertTrue(reader2.acquireNewSegmentsIfNeeded(0).isEmpty());
 
@@ -395,7 +413,7 @@ public class ReaderGroupStateManagerTest {
         assertEquals(3, segments2.size());
 
         ReaderGroupStateManager reader3 = new ReaderGroupStateManager("reader3", stateSynchronizer, controller,
-                clock::get);
+                streamFactory, clock::get);
         reader3.initializeReader(0);
         assertTrue(reader3.acquireNewSegmentsIfNeeded(0).isEmpty());
 
@@ -444,8 +462,9 @@ public class ReaderGroupStateManagerTest {
                                                                                                       config);
         Map<Segment, Long> segments = new HashMap<>();
         segments.put(initialSegment, 1L);
-        ReaderGroupStateManager.initializeReaderGroup(stateSynchronizer, ReaderGroupConfig.builder().build(), segments);
-        val readerState = new ReaderGroupStateManager("testReader", stateSynchronizer, controller, null);
+        ReaderGroupStateManager.initializeReaderGroup(stateSynchronizer, ReaderGroupConfig.builder().build(), segments,
+                ReaderGroupStateManager.getWatermarks(streamFactory, segments));
+        val readerState = new ReaderGroupStateManager("testReader", stateSynchronizer, controller, streamFactory, null);
         readerState.initializeReader(0);
         assertNull(readerState.getCheckpoint());
         stateSynchronizer.updateStateUnconditionally(new CreateCheckpoint("CP1"));
@@ -486,10 +505,11 @@ public class ReaderGroupStateManagerTest {
                                                                                                       new JavaSerializer<>(),
                                                                                                       config);
         Map<Segment, Long> segments = ImmutableMap.of(segment0, 0L, segment1, 1L, segment2, 2L);
-        ReaderGroupStateManager.initializeReaderGroup(stateSynchronizer, ReaderGroupConfig.builder().build(), segments);
-        val readerState1 = new ReaderGroupStateManager("reader1", stateSynchronizer, controller, null);
+        ReaderGroupStateManager.initializeReaderGroup(stateSynchronizer, ReaderGroupConfig.builder().build(), segments,
+                ReaderGroupStateManager.getWatermarks(streamFactory, segments));
+        val readerState1 = new ReaderGroupStateManager("reader1", stateSynchronizer, controller, streamFactory, null);
         readerState1.initializeReader(0);
-        val readerState2 = new ReaderGroupStateManager("reader2", stateSynchronizer, controller, null);
+        val readerState2 = new ReaderGroupStateManager("reader2", stateSynchronizer, controller, streamFactory, null);
         readerState2.initializeReader(0);
         
         assertEquals(segments, stateSynchronizer.getState().getUnassignedSegments());
@@ -528,10 +548,11 @@ public class ReaderGroupStateManagerTest {
                                                                                                       config);
         AtomicLong clock = new AtomicLong();
         Map<Segment, Long> segments = ImmutableMap.of(segment0, 0L, segment1, 1L, segment2, 2L);
-        ReaderGroupStateManager.initializeReaderGroup(stateSynchronizer, ReaderGroupConfig.builder().build(), segments);
-        val readerState1 = new ReaderGroupStateManager("reader1", stateSynchronizer, controller, clock::get);
+        ReaderGroupStateManager.initializeReaderGroup(stateSynchronizer, ReaderGroupConfig.builder().build(), segments,
+                ReaderGroupStateManager.getWatermarks(streamFactory, segments));
+        val readerState1 = new ReaderGroupStateManager("reader1", stateSynchronizer, controller, streamFactory, clock::get);
         readerState1.initializeReader(0);
-        val readerState2 = new ReaderGroupStateManager("reader2", stateSynchronizer, controller, clock::get);
+        val readerState2 = new ReaderGroupStateManager("reader2", stateSynchronizer, controller, streamFactory, clock::get);
         readerState2.initializeReader(0);
         
         assertEquals(segments, stateSynchronizer.getState().getUnassignedSegments());
@@ -571,5 +592,18 @@ public class ReaderGroupStateManagerTest {
         assertNotNull(toRelease);
         assertTrue(readerState2.releaseSegment(toRelease, 10, 1));
         assertEquals(1, stateSynchronizer.getState().getNumberOfUnassignedSegments());
+    }
+
+    @Test(timeout = 10000)
+    public void testGetWatermarks() throws ReinitializationRequiredException {
+        String scope = "scope";
+        String stream = "stream";
+        Segment segment0 = new Segment(scope, stream, 0);
+        Segment segment1 = new Segment(scope, stream, 1);
+        MockSegmentStreamFactory streamFactory = new MockSegmentStreamFactory();
+        Map<Segment, Long> positions = Maps.toMap(Sets.newHashSet(segment0, segment1), s -> 0L);
+        Map<Segment, Long> watermarks = ReaderGroupStateManager.getWatermarks(streamFactory, positions);
+        assertEquals(streamFactory.getMockStream(segment0).fetchCreationTime() - 1L, (long) watermarks.get(segment0));
+        assertEquals(streamFactory.getMockStream(segment1).fetchCreationTime() - 1L, (long) watermarks.get(segment1));
     }
 }

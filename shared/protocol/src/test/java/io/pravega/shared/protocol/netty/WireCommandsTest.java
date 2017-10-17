@@ -85,7 +85,7 @@ public class WireCommandsTest {
 
     @Test
     public void testSegmentRead() throws IOException {
-        testCommand(new WireCommands.SegmentRead(testString1, l, true, false, buffer));
+        testCommand(new WireCommands.SegmentRead(testString1, l, 42L,true, false, buffer));
     }
     
     @Test
@@ -116,7 +116,7 @@ public class WireCommandsTest {
 
     @Test
     public void testStreamSegmentInfo() throws IOException {
-        testCommand(new WireCommands.StreamSegmentInfo(l - 1, testString1, true, false, false, l, l + 1));
+        testCommand(new WireCommands.StreamSegmentInfo(l - 1, testString1, true, false, false, l, l, l + 1));
     }
 
     @Test

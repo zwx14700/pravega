@@ -17,12 +17,17 @@ import io.pravega.client.segment.impl.SegmentMetadataClientFactory;
 import io.pravega.client.segment.impl.SegmentOutputStream;
 import io.pravega.client.segment.impl.SegmentOutputStreamFactory;
 import io.pravega.client.stream.EventWriterConfig;
+import io.pravega.test.common.CounterClock;
+
+import java.time.ZoneId;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
 public class MockSegmentStreamFactory implements SegmentInputStreamFactory, SegmentOutputStreamFactory, SegmentMetadataClientFactory {
+
+    private final CounterClock clock = new CounterClock(ZoneId.systemDefault(), 42L);
 
     private final Map<Segment, MockSegmentIoStreams> segments = new ConcurrentHashMap<>();
 
@@ -33,8 +38,8 @@ public class MockSegmentStreamFactory implements SegmentInputStreamFactory, Segm
         throw new UnsupportedOperationException();
     }
 
-    private MockSegmentIoStreams getMockStream(Segment segment) {
-        MockSegmentIoStreams streams = new MockSegmentIoStreams(segment);
+    public MockSegmentIoStreams getMockStream(Segment segment) {
+        MockSegmentIoStreams streams = new MockSegmentIoStreams(segment, clock);
         segments.putIfAbsent(segment, streams);
         return segments.get(segment);
     }

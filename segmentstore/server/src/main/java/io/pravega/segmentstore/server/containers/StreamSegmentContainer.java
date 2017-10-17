@@ -20,6 +20,7 @@ import io.pravega.common.concurrent.FutureHelpers;
 import io.pravega.common.concurrent.ServiceHelpers;
 import io.pravega.common.util.AsyncMap;
 import io.pravega.segmentstore.contracts.AttributeUpdate;
+import io.pravega.segmentstore.contracts.AttributeUpdateType;
 import io.pravega.segmentstore.contracts.ReadResult;
 import io.pravega.segmentstore.contracts.SegmentProperties;
 import io.pravega.segmentstore.contracts.StreamSegmentNotExistsException;
@@ -40,9 +41,14 @@ import io.pravega.segmentstore.server.logs.operations.StreamSegmentSealOperation
 import io.pravega.segmentstore.server.logs.operations.UpdateAttributesOperation;
 import io.pravega.segmentstore.storage.Storage;
 import io.pravega.segmentstore.storage.StorageFactory;
+
+import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -54,6 +60,9 @@ import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
+
+import static io.pravega.segmentstore.contracts.Attributes.CREATION_TIME;
+import static io.pravega.segmentstore.contracts.Attributes.LAST_WRITE_TIME;
 
 /**
  * Container for StreamSegments. All StreamSegments that are related (based on a hashing functions) will belong to the
@@ -73,8 +82,10 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
     private final StreamSegmentMapper segmentMapper;
     private final ScheduledExecutorService executor;
     private final MetadataCleaner metadataCleaner;
+    private final WatermarkAdvancer watermarkAdvancer;
     private final AtomicBoolean closed;
     private final SegmentStoreMetrics.Container metrics;
+    private final Clock clock;
 
     //endregion
 
@@ -90,9 +101,10 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
      * @param writerFactory            The WriterFactory to use to create Writers.
      * @param storageFactory           The StorageFactory to use to create Storage Adapters.
      * @param executor                 An Executor that can be used to run async tasks.
+     * @param clock                    The clock to use for temporal operations.
      */
     StreamSegmentContainer(int streamSegmentContainerId, ContainerConfig config, OperationLogFactory durableLogFactory, ReadIndexFactory readIndexFactory,
-                           WriterFactory writerFactory, StorageFactory storageFactory, ScheduledExecutorService executor) {
+                           WriterFactory writerFactory, StorageFactory storageFactory, ScheduledExecutorService executor, Clock clock) {
         Preconditions.checkNotNull(config, "config");
         Preconditions.checkNotNull(durableLogFactory, "durableLogFactory");
         Preconditions.checkNotNull(readIndexFactory, "readIndexFactory");
@@ -102,6 +114,7 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
 
         this.traceObjectId = String.format("SegmentContainer[%d]", streamSegmentContainerId);
         this.config = config;
+        this.clock = clock;
         this.storage = storageFactory.createStorageAdapter();
         this.metadata = new StreamSegmentContainerMetadata(streamSegmentContainerId, config.getMaxActiveSegmentCount());
         this.readIndex = readIndexFactory.createReadIndex(this.metadata, this.storage);
@@ -114,6 +127,8 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
         this.metadataCleaner = new MetadataCleaner(this.config, this.metadata, this.stateStore, this::notifyMetadataRemoved,
                 this.executor, this.traceObjectId);
         shutdownWhenStopped(this.metadataCleaner, "MetadataCleaner");
+        this.watermarkAdvancer = new WatermarkAdvancer(this.config, this, executor, this.traceObjectId);
+        shutdownWhenStopped(this.watermarkAdvancer, "WatermarkAdvancer");
         this.segmentMapper = new StreamSegmentMapper(this.metadata, this.durableLog, this.stateStore, this.metadataCleaner::runOnce,
                 this.storage, this.executor);
         this.metrics = new SegmentStoreMetrics.Container(streamSegmentContainerId);
@@ -128,6 +143,7 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
     public void close() {
         if (this.closed.compareAndSet(false, true)) {
             FutureHelpers.await(ServiceHelpers.stopAsync(this, this.executor));
+            this.watermarkAdvancer.close();
             this.metadataCleaner.close();
             this.writer.close();
             this.durableLog.close();
@@ -150,6 +166,7 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
                 .thenRunAsync(() -> this.storage.initialize(this.metadata.getContainerEpoch()), this.executor)
                 .thenCompose(v -> CompletableFuture.allOf(
                         ServiceHelpers.startAsync(this.metadataCleaner, this.executor),
+                        ServiceHelpers.startAsync(this.watermarkAdvancer, this.executor),
                         ServiceHelpers.startAsync(this.writer, this.executor)))
                 .thenRun(() -> {
                     log.info("{}: Started.", this.traceObjectId);
@@ -180,6 +197,7 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
         long traceId = LoggerHelpers.traceEnterWithContext(log, traceObjectId, "doStop");
         log.info("{}: Stopping.", this.traceObjectId);
         CompletableFuture.allOf(
+                ServiceHelpers.stopAsync(this.watermarkAdvancer, this.executor),
                 ServiceHelpers.stopAsync(this.metadataCleaner, this.executor),
                 ServiceHelpers.stopAsync(this.writer, this.executor),
                 ServiceHelpers.stopAsync(this.durableLog, this.executor))
@@ -314,8 +332,13 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
     @Override
     public CompletableFuture<Void> createStreamSegment(String streamSegmentName, Collection<AttributeUpdate> attributes, Duration timeout) {
         ensureRunning();
-
         logRequest("createStreamSegment", streamSegmentName);
+
+        long creationTime = clock.millis();
+        attributes = attributes != null ? new ArrayList<>(attributes) : new ArrayList<>(2);
+        attributes.add(new AttributeUpdate(CREATION_TIME, AttributeUpdateType.None, creationTime));
+        attributes.add(new AttributeUpdate(LAST_WRITE_TIME, AttributeUpdateType.None, creationTime));
+
         this.metrics.createSegment();
         return this.segmentMapper.createNewStreamSegment(streamSegmentName, attributes, timeout);
     }
@@ -323,8 +346,13 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
     @Override
     public CompletableFuture<String> createTransaction(String parentSegmentName, UUID transactionId, Collection<AttributeUpdate> attributes, Duration timeout) {
         ensureRunning();
-
         logRequest("createTransaction", parentSegmentName);
+
+        long creationTime = clock.millis();
+        attributes = attributes != null ? new ArrayList<>(attributes) : new ArrayList<>(2);
+        attributes.add(new AttributeUpdate(CREATION_TIME, AttributeUpdateType.None, creationTime));
+        attributes.add(new AttributeUpdate(LAST_WRITE_TIME, AttributeUpdateType.None, creationTime));
+
         this.metrics.createTxn();
         return this.segmentMapper.createNewTransactionStreamSegment(parentSegmentName, transactionId, attributes, timeout);
     }
@@ -423,6 +451,52 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
     }
 
     //endregion
+
+    // region Watermarking
+
+    @Override
+    public void advanceWatermarks() {
+        ensureRunning();
+        logRequest("advanceWatermarks");
+
+        long now = this.clock.millis();
+        List<Long> idleSegmentIds = new ArrayList<>(this.metadata.getAllStreamSegmentIds())
+                .stream()
+                .map(this.metadata::getStreamSegmentMetadata)
+                .filter(Objects::nonNull)
+                .filter(s -> !s.isSealed() && !s.isTransaction())
+                .filter(s -> getLastWriteTime(s) + config.getMaxWatermarkLag().toMillis() < now)
+                .map(SegmentMetadata::getId)
+                .collect(Collectors.toList());
+
+        if (idleSegmentIds.size() == 0) {
+            // nothing to do
+            return;
+        }
+
+        log.debug("{}: Advancing watermark on idle segments (Segments = {}).", this.traceObjectId, idleSegmentIds);
+        for(long streamSegmentId : idleSegmentIds) {
+            UpdateAttributesOperation operation = new UpdateAttributesOperation(streamSegmentId, Collections.emptyList());
+            this.durableLog.add(operation, config.getMaxWatermarkLag()).whenComplete((v, th) -> {
+                if (th != null) {
+                    log.error("Unable to advance the watermark on segment " + streamSegmentId, th);
+                }
+                else {
+                    log.debug("Advanced the watermark on a segment (Segment = {}, Watermark = {})", streamSegmentId, now);
+                }
+            });
+        }
+    }
+
+    private static long getLastWriteTime(SegmentMetadata segmentMetadata)
+    {
+        Map<UUID, Long> attrs = segmentMetadata.getAttributes();
+        if (attrs.containsKey(LAST_WRITE_TIME)) return attrs.get(LAST_WRITE_TIME);
+        if (attrs.containsKey(CREATION_TIME)) return attrs.get(CREATION_TIME);
+        return Long.MIN_VALUE + 1;
+    }
+
+    // endregion
 
     //region Helpers
 

@@ -45,4 +45,12 @@ public interface ReadResultEntry {
      * @param timeout Timeout for the operation.
      */
     void requestContent(Duration timeout);
+
+    /**
+     * Gets the watermark associated with the entry (if appropriate for that entry type).
+     * Note: the default implementation throws an IllegalStateException.
+     */
+    default long getWatermark() {
+        throw new IllegalStateException(this.getClass().getName() + " does not have a watermark.");
+    }
 }

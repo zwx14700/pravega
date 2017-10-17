@@ -132,7 +132,7 @@ public class ClientFactoryImpl implements ClientFactory {
                 new JavaSerializer<>(),
                 new JavaSerializer<>(),
                 synchronizerConfig);
-        ReaderGroupStateManager stateManager = new ReaderGroupStateManager(readerId, sync, controller, nanoTime);
+        ReaderGroupStateManager stateManager = new ReaderGroupStateManager(readerId, sync, controller, metaFactory, nanoTime);
         stateManager.initializeReader(config.getInitialAllocationDelay());
         return new EventStreamReaderImpl<T>(inFactory, s, stateManager, new Orderer(), milliTime, config);
     }

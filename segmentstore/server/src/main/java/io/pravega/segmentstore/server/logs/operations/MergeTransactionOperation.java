@@ -18,13 +18,14 @@ import java.io.IOException;
 /**
  * Log Operation that indicates a Transaction StreamSegment is merged into its parent StreamSegment.
  */
-public class MergeTransactionOperation extends StorageOperation {
+public class MergeTransactionOperation extends StorageOperation implements TemporalOperation {
     //region Members
 
     private static final byte VERSION = 0;
     private long streamSegmentOffset;
     private long length;
     private long transactionSegmentId;
+    private long timestamp;
 
     //endregion
 
@@ -41,6 +42,7 @@ public class MergeTransactionOperation extends StorageOperation {
         this.transactionSegmentId = transactionSegmentId;
         this.length = -1;
         this.streamSegmentOffset = -1;
+        this.timestamp = Long.MIN_VALUE;
     }
 
     protected MergeTransactionOperation(OperationHeader header, DataInputStream source) throws SerializationException {
@@ -82,6 +84,20 @@ public class MergeTransactionOperation extends StorageOperation {
 
     //endregion
 
+    //region TemporalOperation Properties
+
+    @Override
+    public long getTimestamp() {
+        return this.timestamp;
+    }
+
+    @Override
+    public void setTimestamp(long timestamp) {
+        this.timestamp = timestamp;
+    }
+
+    //endregion
+
     //region Operation Implementation
 
     /**
@@ -117,6 +133,7 @@ public class MergeTransactionOperation extends StorageOperation {
         target.writeByte(VERSION);
         target.writeLong(getStreamSegmentId());
         target.writeLong(this.transactionSegmentId);
+        target.writeLong(this.timestamp);
         target.writeLong(this.length);
         target.writeLong(this.streamSegmentOffset);
     }
@@ -126,6 +143,7 @@ public class MergeTransactionOperation extends StorageOperation {
         readVersion(source, VERSION);
         setStreamSegmentId(source.readLong());
         this.transactionSegmentId = source.readLong();
+        this.timestamp = source.readLong();
         this.length = source.readLong();
         this.streamSegmentOffset = source.readLong();
     }
@@ -133,9 +151,10 @@ public class MergeTransactionOperation extends StorageOperation {
     @Override
     public String toString() {
         return String.format(
-                "%s, TransactionSegmentId = %d, Length = %s, ParentOffset = %s",
+                "%s, TransactionSegmentId = %d, Timestamp = %d, Length = %s, ParentOffset = %s",
                 super.toString(),
                 getTransactionSegmentId(),
+                timestamp,
                 toString(getLength(), -1),
                 toString(getStreamSegmentOffset(), -1));
     }

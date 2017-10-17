@@ -10,6 +10,7 @@
 package io.pravega.client.stream.impl;
 
 import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableSortedMap;
 import io.pravega.client.segment.impl.Segment;
 import io.pravega.client.state.InitialUpdate;
 import io.pravega.client.state.Revision;
@@ -19,6 +20,8 @@ import io.pravega.client.stream.ReaderGroupConfig;
 import io.pravega.client.stream.Stream;
 import io.pravega.common.Exceptions;
 import java.io.Serializable;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -26,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
+import java.util.SortedMap;
 import java.util.stream.Collectors;
 import javax.annotation.concurrent.GuardedBy;
 import lombok.Getter;
@@ -55,16 +59,21 @@ class ReaderGroupState implements Revisioned {
     private final Map<String, Map<Segment, Long>> assignedSegments = new HashMap<>();
     @GuardedBy("$lock")
     private final Map<Segment, Long> unassignedSegments;
+    @GuardedBy("$lock")
+    private final Map<Segment, Long> watermarks;
 
-    ReaderGroupState(String scopedSynchronizerStream, Revision revision, ReaderGroupConfig config, Map<Segment, Long> segmentsToOffsets) {
+    ReaderGroupState(String scopedSynchronizerStream, Revision revision, ReaderGroupConfig config, Map<Segment, Long> segmentsToOffsets, Map<Segment, Long> segmentsToWatermarks) {
         Exceptions.checkNotNullOrEmpty(scopedSynchronizerStream, "scopedSynchronizerStream");
         Preconditions.checkNotNull(revision);
         Preconditions.checkNotNull(config);
         Exceptions.checkNotNullOrEmpty(segmentsToOffsets.entrySet(), "segmentsToOffsets");
+        Exceptions.checkNotNullOrEmpty(segmentsToWatermarks.entrySet(), "segmentsToWatermarks");
+        Preconditions.checkState(segmentsToOffsets.keySet().equals(segmentsToWatermarks.keySet()), "Inconsistent sets of segments");
         this.scopedSynchronizerStream = scopedSynchronizerStream;
         this.revision = revision;
         this.config = config;
         this.unassignedSegments = new LinkedHashMap<>(segmentsToOffsets);
+        this.watermarks = new LinkedHashMap<>(segmentsToWatermarks);
     }
     
     /**
@@ -157,10 +166,16 @@ class ReaderGroupState implements Revisioned {
     int getNumberOfUnassignedSegments() {
         return unassignedSegments.size();
     }
-    
+
+    /**
+     * Returns the unassigned segments sorted by watermark time (ascending).
+     * @return a {@link SortedMap} of segments to offsets.
+     */
     @Synchronized
-    Map<Segment, Long> getUnassignedSegments() {
-        return new HashMap<>(unassignedSegments);
+    SortedMap<Segment, Long> getUnassignedSegments() {
+        return ImmutableSortedMap.<Segment, Long>orderedBy(Comparator.<Segment,Long>comparing(watermarks::get).thenComparing(Segment::getStreamName).thenComparingInt(Segment::getSegmentNumber))
+                .putAll(unassignedSegments)
+                .build();
     }
 
     @Synchronized
@@ -204,7 +219,22 @@ class ReaderGroupState implements Revisioned {
     Map<Segment, Long> getPositionsForCompletedCheckpoint(String checkpointId) {
         return checkpointState.getPositionsForCompletedCheckpoint(checkpointId);
     }
-    
+
+    // region Time
+
+    /**
+     * Returns the current watermark, i.e. the minimum bound (exclusive) for future event timestamps.
+     */
+    @Synchronized
+    long getWatermark() {
+        if(watermarks.size() == 0) {
+            return Long.MAX_VALUE;
+        }
+        return Collections.min(watermarks.values());
+    }
+
+    // endregion
+
     @Override
     @Synchronized
     public String toString() {
@@ -216,6 +246,8 @@ class ReaderGroupState implements Revisioned {
         sb.append(assignedSegments);
         sb.append(" unassignedSegments: ");
         sb.append(unassignedSegments);
+        sb.append(" watermarks: ");
+        sb.append(watermarks);
         sb.append(" }");
         return sb.toString();
     }
@@ -226,10 +258,11 @@ class ReaderGroupState implements Revisioned {
 
         private final ReaderGroupConfig config;
         private final Map<Segment, Long> segments;
-        
+        private final Map<Segment, Long> watermarks;
+
         @Override
         public ReaderGroupState create(String scopedStreamName, Revision revision) {
-            return new ReaderGroupState(scopedStreamName, revision, config, segments);
+            return new ReaderGroupState(scopedStreamName, revision, config, segments, watermarks);
         }
     }
     
@@ -393,7 +426,8 @@ class ReaderGroupState implements Revisioned {
         private final String readerId;
         private final Segment segmentCompleted;
         private final Map<Segment, List<Integer>> successorsMappedToTheirPredecessors; //Immutable
-        
+        private final Map<Segment, Long> successorWatermarks; //Immutable
+
         /**
          * @see ReaderGroupState.ReaderGroupStateUpdate#update(ReaderGroupState)
          */
@@ -422,6 +456,10 @@ class ReaderGroupState implements Revisioned {
                     iter.remove();
                 }
             }
+            state.watermarks.remove(segmentCompleted);
+            for (Entry<Segment, Long> entry : successorWatermarks.entrySet()) {
+                state.watermarks.putIfAbsent(entry.getKey(), entry.getValue());
+            }
         }
     }
     
@@ -431,12 +469,17 @@ class ReaderGroupState implements Revisioned {
         private final String checkpointId;
         private final String readerId;
         private final Map<Segment, Long> positions; //Immutable
-        
+        private final Map<Segment, Long> watermarks; //Immutable
+
         /**
          * @see ReaderGroupState.ReaderGroupStateUpdate#update(ReaderGroupState)
          */
         @Override
         void update(ReaderGroupState state) {
+            Map<Segment, Long> assigned = state.assignedSegments.get(readerId);
+            Preconditions.checkState(assigned != null, "%s is not part of the readerGroup", readerId);
+            Preconditions.checkState(assigned.keySet().containsAll(watermarks.keySet()), "%s asked to update watermarks for segments not assigned to it", readerId);
+            state.watermarks.putAll(watermarks);
             state.checkpointState.readerCheckpointed(checkpointId, readerId, positions);
         }
     }

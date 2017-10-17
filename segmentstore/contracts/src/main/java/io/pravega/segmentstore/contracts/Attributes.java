@@ -41,6 +41,11 @@ public final class Attributes {
     public static final UUID SCALE_POLICY_RATE = new UUID(WELL_KNOWN_ID_PREFIX, 3);
 
     /**
+     * Defines an attribute that can be used to denote Segment last write time.
+     */
+    public static final UUID LAST_WRITE_TIME = new UUID(WELL_KNOWN_ID_PREFIX, 4);
+
+    /**
      * Determines whether the given Attribute Id refers to a dynamic attribute (vs a well-known one).
      *
      * @param attributeId The Attribute Id to check.

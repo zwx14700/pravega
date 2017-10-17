@@ -25,6 +25,7 @@ import io.pravega.segmentstore.server.logs.operations.MergeTransactionOperation;
 import io.pravega.segmentstore.server.logs.operations.SegmentOperation;
 import io.pravega.segmentstore.server.logs.operations.StreamSegmentAppendOperation;
 import io.pravega.segmentstore.server.logs.operations.StreamSegmentSealOperation;
+import io.pravega.segmentstore.server.logs.operations.TemporalOperation;
 import io.pravega.segmentstore.server.logs.operations.UpdateAttributesOperation;
 import java.util.Collection;
 import java.util.Collections;
@@ -33,6 +34,8 @@ import java.util.Map;
 import java.util.UUID;
 import javax.annotation.concurrent.NotThreadSafe;
 import lombok.Getter;
+
+import static io.pravega.segmentstore.contracts.Attributes.LAST_WRITE_TIME;
 
 /**
  * An update transaction that can apply changes to a SegmentMetadata.
@@ -440,6 +443,7 @@ class SegmentMetadataUpdateTransaction implements UpdateableSegmentMetadata {
 
         this.length += operation.getData().length;
         acceptAttributes(operation.getAttributeUpdates());
+        acceptTemporalOperation(operation);
         this.isChanged = true;
     }
 
@@ -452,6 +456,7 @@ class SegmentMetadataUpdateTransaction implements UpdateableSegmentMetadata {
     void acceptOperation(UpdateAttributesOperation operation) {
         ensureSegmentId(operation);
         acceptAttributes(operation.getAttributeUpdates());
+        acceptTemporalOperation(operation);
         this.isChanged = true;
     }
 
@@ -505,6 +510,7 @@ class SegmentMetadataUpdateTransaction implements UpdateableSegmentMetadata {
         }
 
         this.length += transLength;
+        acceptTemporalOperation(operation);
         this.isChanged = true;
     }
 
@@ -536,6 +542,13 @@ class SegmentMetadataUpdateTransaction implements UpdateableSegmentMetadata {
         for (AttributeUpdate au : attributeUpdates) {
             this.attributeValues.put(au.getAttributeId(), au.getValue());
         }
+    }
+
+    /**
+     * Accepts a temporal operation in the metadata.
+     */
+    private void acceptTemporalOperation(TemporalOperation operation) {
+        this.attributeValues.put(LAST_WRITE_TIME, operation.getTimestamp());
     }
 
     //endregion

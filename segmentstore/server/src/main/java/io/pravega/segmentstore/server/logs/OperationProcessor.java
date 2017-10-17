@@ -22,13 +22,17 @@ import io.pravega.common.util.SortedDeque;
 import io.pravega.segmentstore.server.ContainerMetadata;
 import io.pravega.segmentstore.server.DataCorruptionException;
 import io.pravega.segmentstore.server.IllegalContainerStateException;
+import io.pravega.segmentstore.server.OperationLog;
 import io.pravega.segmentstore.server.SegmentStoreMetrics;
 import io.pravega.segmentstore.server.UpdateableContainerMetadata;
 import io.pravega.segmentstore.server.logs.operations.CompletableOperation;
 import io.pravega.segmentstore.server.logs.operations.Operation;
+import io.pravega.segmentstore.server.logs.operations.TemporalOperation;
 import io.pravega.segmentstore.storage.DataLogWriterNotPrimaryException;
 import io.pravega.segmentstore.storage.DurableDataLog;
 import io.pravega.segmentstore.storage.QueueStats;
+
+import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -71,6 +75,7 @@ class OperationProcessor extends AbstractThreadPoolService implements AutoClosea
     private final DataFrameBuilder<Operation> dataFrameBuilder;
     @Getter
     private final SegmentStoreMetrics.OperationProcessor metrics;
+    private final Clock clock;
 
     //endregion
 
@@ -84,9 +89,10 @@ class OperationProcessor extends AbstractThreadPoolService implements AutoClosea
      * @param durableDataLog   The DataFrameLog to write DataFrames to.
      * @param checkpointPolicy The Checkpoint Policy for Metadata.
      * @param executor         An Executor to use for async operations.
+     * @param clock            The clock to use for temporal operations.
      * @throws NullPointerException If any of the arguments are null.
      */
-    OperationProcessor(UpdateableContainerMetadata metadata, MemoryStateUpdater stateUpdater, DurableDataLog durableDataLog, MetadataCheckpointPolicy checkpointPolicy, ScheduledExecutorService executor) {
+    OperationProcessor(UpdateableContainerMetadata metadata, MemoryStateUpdater stateUpdater, DurableDataLog durableDataLog, MetadataCheckpointPolicy checkpointPolicy, ScheduledExecutorService executor, Clock clock) {
         super(String.format("OperationProcessor[%d]", metadata.getContainerId()), executor);
         this.metadata = metadata;
         this.metadataUpdater = new OperationMetadataUpdater(this.metadata);
@@ -96,6 +102,7 @@ class OperationProcessor extends AbstractThreadPoolService implements AutoClosea
         val args = new DataFrameBuilder.Args(this.state::frameSealed, this.state::commit, this.state::fail, this.executor);
         this.dataFrameBuilder = new DataFrameBuilder<>(this.durableDataLog, args);
         this.metrics = new SegmentStoreMetrics.OperationProcessor(this.metadata.getContainerId());
+        this.clock = clock;
     }
 
     //endregion
@@ -324,6 +331,13 @@ class OperationProcessor extends AbstractThreadPoolService implements AutoClosea
             // Update Metadata and Operations with any missing data (offsets, lengths, etc) - the Metadata Updater
             // has all the knowledge for that task.
             this.metadataUpdater.preProcessOperation(entry);
+
+            // Assign a timestamp if the operation is temporal.
+            if (entry instanceof TemporalOperation) {
+                long timestamp = clock.millis();
+                ((TemporalOperation) entry).setTimestamp(timestamp);
+                log.debug("{}: Temporal operation was timestamped (Timestamp = {}, Operation = {}).", traceObjectId, timestamp, entry);
+            }
 
             // Entry is ready to be serialized; assign a sequence number.
             entry.setSequenceNumber(this.metadataUpdater.nextOperationSequenceNumber());

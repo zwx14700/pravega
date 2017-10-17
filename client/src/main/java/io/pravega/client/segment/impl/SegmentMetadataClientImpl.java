@@ -244,6 +244,17 @@ class SegmentMetadataClientImpl implements SegmentMetadataClient {
     }
 
     @Override
+    public long fetchCreationTime() {
+        Exceptions.checkNotClosed(closed.get(), this);
+        return RETRY_SCHEDULE.retryingOn(ConnectionFailedException.class)
+                             .throwingOn(InvalidStreamException.class)
+                             .run(() -> {
+                                 return FutureHelpers.getThrowingException(getSegmentInfo())
+                                                     .getCreationTime();
+                             });
+    }
+
+    @Override
     public long fetchProperty(SegmentAttribute attribute) {
         Exceptions.checkNotClosed(closed.get(), this);
         return RETRY_SCHEDULE.retryingOn(ConnectionFailedException.class)

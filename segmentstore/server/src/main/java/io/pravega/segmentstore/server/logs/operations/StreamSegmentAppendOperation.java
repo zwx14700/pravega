@@ -24,7 +24,7 @@ import java.util.Collection;
  * Log Operation that represents a StreamSegment Append. This operation, as opposed from CachedStreamSegmentAppendOperation,
  * can be serialized to a DurableDataLog. This operation (although possible), should not be directly added to the In-Memory Transaction Log.
  */
-public class StreamSegmentAppendOperation extends StorageOperation {
+public class StreamSegmentAppendOperation extends StorageOperation implements TemporalOperation {
     //region Members
 
     private static final long NO_OFFSET = -1;
@@ -32,6 +32,7 @@ public class StreamSegmentAppendOperation extends StorageOperation {
     private long streamSegmentOffset;
     private byte[] data;
     private Collection<AttributeUpdate> attributeUpdates;
+    private long timestamp;
 
     //endregion
 
@@ -63,6 +64,7 @@ public class StreamSegmentAppendOperation extends StorageOperation {
         this.data = data;
         this.streamSegmentOffset = offset;
         this.attributeUpdates = attributeUpdates;
+        this.timestamp = Long.MIN_VALUE;
     }
 
     protected StreamSegmentAppendOperation(OperationHeader header, DataInputStream source) throws SerializationException {
@@ -103,6 +105,20 @@ public class StreamSegmentAppendOperation extends StorageOperation {
 
     //endregion
 
+    //region TemporalOperation Properties
+
+    @Override
+    public long getTimestamp() {
+        return this.timestamp;
+    }
+
+    @Override
+    public void setTimestamp(long timestamp) {
+        this.timestamp = timestamp;
+    }
+
+    //endregion
+
     //region Operation Implementation
 
     @Override
@@ -126,6 +142,7 @@ public class StreamSegmentAppendOperation extends StorageOperation {
 
         target.writeByte(CURRENT_VERSION);
         target.writeLong(getStreamSegmentId());
+        target.writeLong(this.timestamp);
         target.writeLong(this.streamSegmentOffset);
         target.writeInt(data.length);
         target.write(data, 0, data.length);
@@ -136,6 +153,7 @@ public class StreamSegmentAppendOperation extends StorageOperation {
     protected void deserializeContent(DataInputStream source) throws IOException, SerializationException {
         readVersion(source, CURRENT_VERSION);
         setStreamSegmentId(source.readLong());
+        this.timestamp = source.readLong();
         this.streamSegmentOffset = source.readLong();
         int dataLength = source.readInt();
         this.data = new byte[dataLength];
@@ -147,8 +165,9 @@ public class StreamSegmentAppendOperation extends StorageOperation {
     @Override
     public String toString() {
         return String.format(
-                "%s, Offset = %s, Length = %d, Attributes = %d",
+                "%s, Timestamp = %d, Offset = %s, Length = %d, Attributes = %d",
                 super.toString(),
+                this.timestamp,
                 toString(this.streamSegmentOffset, -1),
                 this.data.length,
                 this.attributeUpdates == null ? 0 : this.attributeUpdates.size());

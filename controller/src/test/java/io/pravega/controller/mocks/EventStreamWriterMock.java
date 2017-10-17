@@ -9,10 +9,12 @@
  */
 package io.pravega.controller.mocks;
 
+import io.pravega.client.stream.EventRead;
 import io.pravega.client.stream.EventStreamReader;
 import io.pravega.client.stream.EventStreamWriter;
 import io.pravega.client.stream.EventWriterConfig;
 import io.pravega.client.stream.Transaction;
+import io.pravega.client.stream.impl.EventReadImpl;
 import org.apache.commons.lang3.NotImplementedException;
 
 import java.util.ArrayList;
@@ -26,17 +28,17 @@ import java.util.concurrent.LinkedBlockingQueue;
  * Mock EventStreamWriter.
  */
 public class EventStreamWriterMock<T> implements EventStreamWriter<T> {
-    BlockingQueue<T> eventList = new LinkedBlockingQueue<>();
+    BlockingQueue<EventRead<T>> eventList = new LinkedBlockingQueue<>();
 
     @Override
     public CompletableFuture<Void> writeEvent(T event) {
-        eventList.add(event);
+        eventList.add(new EventReadImpl<>(null, event, null, null, null, null));
         return CompletableFuture.completedFuture(null);
     }
 
     @Override
     public CompletableFuture<Void> writeEvent(String routingKey, T event) {
-        eventList.add(event);
+        eventList.add(new EventReadImpl<>(null, event, null, null, null, null));
         return CompletableFuture.completedFuture(null);
     }
 
@@ -65,8 +67,8 @@ public class EventStreamWriterMock<T> implements EventStreamWriter<T> {
 
     }
 
-    public List<T> getEventList() {
-        List<T> list = new ArrayList<>();
+    public List<EventRead<T>> getEventList() {
+        List<EventRead<T>> list = new ArrayList<>();
         eventList.drainTo(list);
         return list;
     }

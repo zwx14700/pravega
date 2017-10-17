@@ -54,7 +54,7 @@ public class AsyncSegmentInputStreamTest {
         InOrder inOrder = Mockito.inOrder(c);
         connectionFactory.provideConnection(endpoint, c);
         
-        WireCommands.SegmentRead segmentRead = new WireCommands.SegmentRead(segment.getScopedName(), 1234, false, false, ByteBuffer.allocate(0));
+        WireCommands.SegmentRead segmentRead = new WireCommands.SegmentRead(segment.getScopedName(), 1234, 42L, false, false, ByteBuffer.allocate(0));
         Mockito.doAnswer(new Answer<Void>() {
             @Override
             public Void answer(InvocationOnMock invocation) throws Throwable {
@@ -108,7 +108,7 @@ public class AsyncSegmentInputStreamTest {
         ClientConnection c = mock(ClientConnection.class);
         connectionFactory.provideConnection(endpoint, c);
         
-        WireCommands.SegmentRead segmentRead = new WireCommands.SegmentRead(segment.getScopedName(), 1234, false, false, ByteBuffer.allocate(0));
+        WireCommands.SegmentRead segmentRead = new WireCommands.SegmentRead(segment.getScopedName(), 1234, 42L, false, false, ByteBuffer.allocate(0));
         CompletableFuture<SegmentRead> readFuture = in.read(1234, 5678);
         Async.testBlocking(() -> readFuture.get(), () -> {
             ReplyProcessor processor = connectionFactory.getProcessor(endpoint);
@@ -135,8 +135,8 @@ public class AsyncSegmentInputStreamTest {
         CompletableFuture<SegmentRead> readFuture = in.read(1234, 5678);
         Async.testBlocking(() -> readFuture.get(), () -> {
             ReplyProcessor processor = connectionFactory.getProcessor(endpoint);
-            processor.segmentRead(new WireCommands.SegmentRead(segment.getScopedName(), 1235, false, false, ByteBuffer.wrap(bad)));            
-            processor.segmentRead(new WireCommands.SegmentRead(segment.getScopedName(), 1234, false, false, ByteBuffer.wrap(good)));         
+            processor.segmentRead(new WireCommands.SegmentRead(segment.getScopedName(), 1235, 42L, false, false, ByteBuffer.wrap(bad)));
+            processor.segmentRead(new WireCommands.SegmentRead(segment.getScopedName(), 1234, 42L, false, false, ByteBuffer.wrap(good)));
         });
         verify(c).sendAsync(new WireCommands.ReadSegment(segment.getScopedName(), 1234, 5678));
         assertTrue(FutureHelpers.isSuccessful(readFuture));

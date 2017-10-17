@@ -173,24 +173,25 @@ public class PravegaRequestProcessor extends FailingRequestProcessor implements 
     private void handleReadResult(ReadSegment request, ReadResult result) {
         String segment = request.getSegment();
         ArrayList<ReadResultEntryContents> cachedEntries = new ArrayList<>();
-        ReadResultEntry nonCachedEntry = collectCachedEntries(request.getOffset(), result, cachedEntries);
+        ReadResultEntry lastEntry = collectCachedEntries(request.getOffset(), result, cachedEntries);
+        Preconditions.checkState(lastEntry != null, "No ReadResultEntries returned from read!?");
 
-        boolean endOfSegment = nonCachedEntry != null && nonCachedEntry.getType() == EndOfStreamSegment;
-        boolean atTail = nonCachedEntry != null && nonCachedEntry.getType() == Future;
+        boolean endOfSegment = lastEntry.getType() == EndOfStreamSegment;
+        boolean atTail = lastEntry.getType() == Future;
 
         if (!cachedEntries.isEmpty() || endOfSegment) {
             ByteBuffer data = copyData(cachedEntries);
-            SegmentRead reply = new SegmentRead(segment, request.getOffset(), atTail, endOfSegment, data);
+            long watermark = endOfSegment ? lastEntry.getWatermark() : cachedEntries.get(cachedEntries.size() - 1).getWatermark();
+            SegmentRead reply = new SegmentRead(segment, request.getOffset(), watermark, atTail, endOfSegment, data);
             connection.send(reply);
         } else {
-            Preconditions.checkState(nonCachedEntry != null, "No ReadResultEntries returned from read!?");
-            nonCachedEntry.requestContent(TIMEOUT);
-            nonCachedEntry.getContent()
+            lastEntry.requestContent(TIMEOUT);
+            lastEntry.getContent()
                     .thenAccept(contents -> {
                         ByteBuffer data = copyData(Collections.singletonList(contents));
-                        connection.send(new SegmentRead(segment, nonCachedEntry.getStreamSegmentOffset(), false, endOfSegment, data));
+                        connection.send(new SegmentRead(segment, lastEntry.getStreamSegmentOffset(), contents.getWatermark(), false, endOfSegment, data));
                     })
-                    .exceptionally(e -> handleException(nonCachedEntry.getStreamSegmentOffset(), segment, "Read segment", e));
+                    .exceptionally(e -> handleException(lastEntry.getStreamSegmentOffset(), segment, "Read segment", e));
         }
     }
 
@@ -200,9 +201,10 @@ public class PravegaRequestProcessor extends FailingRequestProcessor implements 
      */
     private ReadResultEntry collectCachedEntries(long initialOffset, ReadResult readResult,
                                                  ArrayList<ReadResultEntryContents> cachedEntries) {
+        ReadResultEntry entry = null;
         long expectedOffset = initialOffset;
         while (readResult.hasNext()) {
-            ReadResultEntry entry = readResult.next();
+            entry = readResult.next();
             if (entry.getType() == Cache) {
                 Preconditions.checkState(entry.getStreamSegmentOffset() == expectedOffset,
                         "Data returned from read was not contiguous.");
@@ -213,7 +215,7 @@ public class PravegaRequestProcessor extends FailingRequestProcessor implements 
                 return entry;
             }
         }
-        return null;
+        return entry;
     }
 
     /**
@@ -226,6 +228,7 @@ public class PravegaRequestProcessor extends FailingRequestProcessor implements 
         ByteBuffer data = ByteBuffer.allocate(totalSize);
         int bytesCopied = 0;
         for (ReadResultEntryContents content : contents) {
+            if (content.getLength() == 0) continue;
             int copied = StreamHelpers.readAll(content.getData(), data.array(), bytesCopied, totalSize - bytesCopied);
             Preconditions.checkState(copied == content.getLength(), "Read fewer bytes than available.");
             bytesCopied += copied;
@@ -288,14 +291,15 @@ public class PravegaRequestProcessor extends FailingRequestProcessor implements 
         segmentStore.getStreamSegmentInfo(segmentName, false, TIMEOUT)
                 .thenAccept(properties -> {
                     if (properties != null) {
+                        Long createdTime = properties.getAttributes().get(CREATION_TIME);
                         StreamSegmentInfo result = new StreamSegmentInfo(getStreamSegmentInfo.getRequestId(),
                                 properties.getName(), true, properties.isSealed(), properties.isDeleted(),
-                                properties.getLastModified().getTime(), properties.getLength());
+                                createdTime, properties.getLastModified().getTime(), properties.getLength());
                         log.trace("Read stream segment info: {}", result);
                         connection.send(result);
                     } else {
                         log.trace("getStreamSegmentInfo could not find segment {}", segmentName);
-                        connection.send(new StreamSegmentInfo(getStreamSegmentInfo.getRequestId(), segmentName, false, true, true, 0, 0));
+                        connection.send(new StreamSegmentInfo(getStreamSegmentInfo.getRequestId(), segmentName, false, true, true, 0, 0, 0));
                     }
                 })
                 .exceptionally(e -> handleException(getStreamSegmentInfo.getRequestId(), segmentName, "Get segment info", e));
@@ -388,12 +392,10 @@ public class PravegaRequestProcessor extends FailingRequestProcessor implements 
 
     @Override
     public void createTransaction(CreateTransaction createTransaction) {
-        Collection<AttributeUpdate> attributes = Collections.singleton(
-                new AttributeUpdate(CREATION_TIME, AttributeUpdateType.None, System.currentTimeMillis()));
         log.debug("Creating transaction {} ", createTransaction);
 
         long requestId = createTransaction.getRequestId();
-        segmentStore.createTransaction(createTransaction.getSegment(), createTransaction.getTxid(), attributes, TIMEOUT)
+        segmentStore.createTransaction(createTransaction.getSegment(), createTransaction.getTxid(), Collections.emptyList(), TIMEOUT)
                 .thenAccept(txName -> connection.send(new TransactionCreated(requestId, createTransaction.getSegment(), createTransaction.getTxid())))
                 .exceptionally(e -> handleException(requestId, createTransaction.getSegment(), "Create transaction", e));
     }

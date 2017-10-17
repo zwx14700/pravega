@@ -12,6 +12,8 @@ package io.pravega.client.stream.mock;
 import io.pravega.client.admin.ReaderGroupManager;
 import io.pravega.client.admin.StreamManager;
 import io.pravega.client.netty.impl.ConnectionFactoryImpl;
+import io.pravega.client.segment.impl.SegmentMetadataClientFactory;
+import io.pravega.client.segment.impl.SegmentMetadataClientFactoryImpl;
 import io.pravega.common.concurrent.FutureHelpers;
 import io.pravega.shared.NameUtils;
 import io.pravega.client.state.SynchronizerConfig;
@@ -38,12 +40,14 @@ public class MockStreamManager implements StreamManager, ReaderGroupManager {
     private final MockController controller;
     @Getter
     private final MockClientFactory clientFactory;
+    private final SegmentMetadataClientFactory segmentMetadataClientFactory;
 
     public MockStreamManager(String scope, String endpoint, int port) {
         this.scope = scope;
         this.connectionFactory = new ConnectionFactoryImpl(false);
         this.controller = new MockController(endpoint, port, connectionFactory);
         this.clientFactory = new MockClientFactory(scope, controller);
+        this.segmentMetadataClientFactory = new SegmentMetadataClientFactoryImpl(controller, connectionFactory);
     }
 
     @Override
@@ -126,7 +130,7 @@ public class MockStreamManager implements StreamManager, ReaderGroupManager {
                                               .scalingPolicy(ScalingPolicy.fixed(1)).build());
         SynchronizerConfig synchronizerConfig = SynchronizerConfig.builder().build();
         ReaderGroupImpl result = new ReaderGroupImpl(scope, groupName, synchronizerConfig, new JavaSerializer<>(),
-                new JavaSerializer<>(), clientFactory, controller, connectionFactory);
+                new JavaSerializer<>(), clientFactory, controller, connectionFactory, segmentMetadataClientFactory);
         result.initializeGroup(config, streamNames);
         return result;
     }

@@ -29,6 +29,11 @@ public class OrdererTest {
         long offset = 0;
 
         @Override
+        public long getWatermark() {
+            return 0;
+        }
+
+        @Override
         public Segment getSegmentId() {
             return null;
         }

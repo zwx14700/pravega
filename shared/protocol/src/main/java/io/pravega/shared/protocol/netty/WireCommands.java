@@ -587,6 +587,7 @@ public final class WireCommands {
         final WireCommandType type = WireCommandType.SEGMENT_READ;
         final String segment;
         final long offset;
+        final long watermark;
         final boolean atTail; //TODO: Is sometimes false when actual state is unknown.
         final boolean endOfSegment;
         final ByteBuffer data;
@@ -600,6 +601,7 @@ public final class WireCommands {
         public void writeFields(DataOutput out) throws IOException {
             out.writeUTF(segment);
             out.writeLong(offset);
+            out.writeLong(watermark);
             out.writeBoolean(atTail);
             out.writeBoolean(endOfSegment);
             int dataLength = data.remaining();
@@ -610,6 +612,7 @@ public final class WireCommands {
         public static WireCommand readFrom(DataInput in, int length) throws IOException {
             String segment = in.readUTF();
             long offset = in.readLong();
+            long watermark = in.readLong();
             boolean atTail = in.readBoolean();
             boolean endOfSegment = in.readBoolean();
             int dataLength = in.readInt();
@@ -618,7 +621,7 @@ public final class WireCommands {
             }
             byte[] data = new byte[dataLength];
             in.readFully(data);
-            return new SegmentRead(segment, offset, atTail, endOfSegment, ByteBuffer.wrap(data));
+            return new SegmentRead(segment, offset, watermark, atTail, endOfSegment, ByteBuffer.wrap(data));
         }
     }
 
@@ -764,6 +767,7 @@ public final class WireCommands {
         final boolean exists;
         final boolean isSealed;
         final boolean isDeleted;
+        final long creationTime;
         final long lastModified;
         final long segmentLength;
 
@@ -779,6 +783,7 @@ public final class WireCommands {
             out.writeBoolean(exists);
             out.writeBoolean(isSealed);
             out.writeBoolean(isDeleted);
+            out.writeLong(creationTime);
             out.writeLong(lastModified);
             out.writeLong(segmentLength);
         }
@@ -789,9 +794,10 @@ public final class WireCommands {
             boolean exists = in.readBoolean();
             boolean isSealed = in.readBoolean();
             boolean isDeleted = in.readBoolean();
+            long creationTime = in.readLong();
             long lastModified = in.readLong();
             long segmentLength = in.readLong();
-            return new StreamSegmentInfo(requestId, segmentName, exists, isSealed, isDeleted, lastModified, segmentLength);
+            return new StreamSegmentInfo(requestId, segmentName, exists, isSealed, isDeleted, creationTime, lastModified, segmentLength);
         }
     }
 

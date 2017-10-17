@@ -25,4 +25,12 @@ public interface SegmentContainer extends StreamSegmentStore, Container {
      * @return A Collection with the SegmentProperties for these segments.
      */
     Collection<SegmentProperties> getActiveSegments();
+
+    /**
+     * Advances the watermarks on active Segments.
+     *
+     * <p>The watermark advances naturally on each write to a segment.  This method advances the watermark on active,
+     * non-sealed segments that haven't been recently written to.
+     */
+    void advanceWatermarks();
 }

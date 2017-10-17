@@ -38,9 +38,12 @@ public interface SegmentInputStream extends AutoCloseable {
      * @return The current offset.
      */
     public abstract long getOffset();
-    
 
-    
+    /**
+     * Gets the current watermark.
+     */
+    public long getWatermark();
+
     /**
      * Reads bytes from the segment a single event. Buffering is performed internally to try to prevent
      * blocking. If there is no event after timeout null will be returned. EndOfSegmentException indicates the

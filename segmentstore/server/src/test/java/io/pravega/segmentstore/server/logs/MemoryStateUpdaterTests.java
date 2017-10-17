@@ -186,6 +186,7 @@ public class MemoryStateUpdaterTests {
         static final String APPEND = "append";
         static final String BEGIN_MERGE = "beginMerge";
         static final String COMPLETE_MERGE = "completeMerge";
+        static final String UPDATE_METADATA = "updateMetadata";
         static final String READ = "read";
         static final String READ_DIRECT = "readDirect";
         static final String TRIGGER_FUTURE_READS = "triggerFutureReads";
@@ -221,6 +222,12 @@ public class MemoryStateUpdaterTests {
             invoke(new MethodInvocation(COMPLETE_MERGE)
                     .withArg("targetStreamSegmentId", targetStreamSegmentId)
                     .withArg("sourceStreamSegmentId", sourceStreamSegmentId));
+        }
+
+        @Override
+        public void updateMetadata(long segmentId) {
+            invoke(new MethodInvocation(UPDATE_METADATA)
+                    .withArg("segmentId", segmentId));
         }
 
         @Override

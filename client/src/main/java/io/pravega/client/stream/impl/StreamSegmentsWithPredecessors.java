@@ -10,6 +10,7 @@
 package io.pravega.client.stream.impl;
 
 import io.pravega.client.segment.impl.Segment;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;

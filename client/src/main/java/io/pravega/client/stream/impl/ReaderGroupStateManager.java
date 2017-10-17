@@ -10,7 +10,10 @@
 package io.pravega.client.stream.impl;
 
 import com.google.common.base.Preconditions;
+import com.google.common.collect.Maps;
 import io.pravega.client.segment.impl.Segment;
+import io.pravega.client.segment.impl.SegmentMetadataClient;
+import io.pravega.client.segment.impl.SegmentMetadataClientFactory;
 import io.pravega.client.state.StateSynchronizer;
 import io.pravega.client.stream.Position;
 import io.pravega.client.stream.ReaderGroupConfig;
@@ -37,9 +40,12 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
+
 import lombok.Getter;
 import lombok.val;
 import org.apache.commons.lang3.RandomUtils;
+import org.apache.commons.lang3.tuple.Pair;
 
 import static io.pravega.common.concurrent.FutureHelpers.getAndHandleExceptions;
 
@@ -72,11 +78,12 @@ public class ReaderGroupStateManager {
     private final String readerId;
     private final StateSynchronizer<ReaderGroupState> sync;
     private final Controller controller;
+    private final SegmentMetadataClientFactory metaFactory;
     private final TimeoutTimer releaseTimer;
     private final TimeoutTimer acquireTimer;
     private final TimeoutTimer fetchStateTimer;
 
-    ReaderGroupStateManager(String readerId, StateSynchronizer<ReaderGroupState> sync, Controller controller, Supplier<Long> nanoClock) {
+    ReaderGroupStateManager(String readerId, StateSynchronizer<ReaderGroupState> sync, Controller controller, SegmentMetadataClientFactory metaFactory, Supplier<Long> nanoClock) {
         Preconditions.checkNotNull(readerId);
         Preconditions.checkNotNull(sync);
         Preconditions.checkNotNull(controller);
@@ -84,6 +91,7 @@ public class ReaderGroupStateManager {
         this.hashHelper = HashHelper.seededWith(readerId);
         this.sync = sync;
         this.controller = controller;
+        this.metaFactory = metaFactory;
         if (nanoClock == null) {
             nanoClock = System::nanoTime;
         }
@@ -93,8 +101,8 @@ public class ReaderGroupStateManager {
     }
 
     static void initializeReaderGroup(StateSynchronizer<ReaderGroupState> sync,
-                                      ReaderGroupConfig config, Map<Segment, Long> segments) {
-        sync.initialize(new ReaderGroupState.ReaderGroupStateInit(config, segments));
+                                      ReaderGroupConfig config, Map<Segment, Long> segments, Map<Segment, Long> watermarks) {
+        sync.initialize(new ReaderGroupState.ReaderGroupStateInit(config, segments, watermarks));
     }
 
     /**
@@ -154,13 +162,16 @@ public class ReaderGroupStateManager {
      */
     void handleEndOfSegment(Segment segmentCompleted) throws ReinitializationRequiredException {
         val successors = getAndHandleExceptions(controller.getSuccessors(segmentCompleted), RuntimeException::new);
+        val positions = Maps.toMap(successors.getSegmentToPredecessor().keySet(), s -> 0L);
+        val watermarks = getWatermarks(metaFactory, positions);
+
         AtomicBoolean reinitRequired = new AtomicBoolean(false);
         sync.updateState(state -> {
             if (!state.isReaderOnline(readerId)) {
                 reinitRequired.set(true);
                 return null;
             }
-            return Collections.singletonList(new SegmentCompleted(readerId, segmentCompleted, successors.getSegmentToPredecessor()));
+            return Collections.singletonList(new SegmentCompleted(readerId, segmentCompleted, successors.getSegmentToPredecessor(), watermarks));
         });
         if (reinitRequired.get()) {
             throw new ReinitializationRequiredException();
@@ -347,18 +358,42 @@ public class ReaderGroupStateManager {
         }
         return state.getCheckpointForReader(readerId);
     }
-    
     void checkpoint(String checkpointName, PositionInternal lastPosition) throws ReinitializationRequiredException {
+        checkpoint(checkpointName, lastPosition, Collections.emptyMap());
+    }
+
+    void checkpoint(String checkpointName, PositionInternal lastPosition, Map<Segment, Long> watermarks) throws ReinitializationRequiredException {
         AtomicBoolean reinitRequired = new AtomicBoolean(false);
         sync.updateState(state -> {
             if (!state.isReaderOnline(readerId)) {
                 reinitRequired.set(true);
                 return null;
             }
-            return Collections.singletonList(new CheckpointReader(checkpointName, readerId, lastPosition.getOwnedSegmentsWithOffsets()));
+            return Collections.singletonList(new CheckpointReader(checkpointName, readerId, lastPosition.getOwnedSegmentsWithOffsets(), watermarks));
         });
         if (reinitRequired.get()) {
             throw new ReinitializationRequiredException();
         }
+    }
+
+    long getWatermark() {
+        fetchUpdatesIfNeeded();
+        ReaderGroupState state = sync.getState();
+        return state.getWatermark();
+    }
+
+    /**
+     * Fetches the watermarks for the given segments.
+     * @param metaFactory    The metadata client to use.
+     * @param segments       The segments and corresponding positions.
+     * @return               A map of segments to watermarks.
+     */
+    static Map<Segment, Long> getWatermarks(SegmentMetadataClientFactory metaFactory, Map<Segment, Long> segments) {
+        // TODO (wrighe3) use position information to obtain more accurate watermarks
+        return segments.keySet().parallelStream().map(segment -> {
+            try(SegmentMetadataClient metadataClient = metaFactory.createSegmentMetadataClient(segment)) {
+                return Pair.of(segment, metadataClient.fetchCreationTime() - 1L);
+            }
+        }).collect(Collectors.toMap(Pair::getKey, Pair::getValue));
     }
 }

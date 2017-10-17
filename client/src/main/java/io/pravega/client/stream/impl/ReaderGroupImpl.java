@@ -64,6 +64,7 @@ public class ReaderGroupImpl implements ReaderGroup, ReaderGroupMetrics {
     private final ClientFactory clientFactory;
     private final Controller controller;
     private final ConnectionFactory connectionFactory;
+    private final SegmentMetadataClientFactory segmentMetadataClientFactory;
 
     /**
      * Called by the StreamManager to provide the streams the group should start reading from.
@@ -75,7 +76,8 @@ public class ReaderGroupImpl implements ReaderGroup, ReaderGroupMetrics {
         @Cleanup
         StateSynchronizer<ReaderGroupState> synchronizer = createSynchronizer();
         Map<Segment, Long> segments = getSegmentsForStreams(streams);
-        ReaderGroupStateManager.initializeReaderGroup(synchronizer, config, segments);
+        Map<Segment, Long> watermarks = ReaderGroupStateManager.getWatermarks(segmentMetadataClientFactory, segments);
+        ReaderGroupStateManager.initializeReaderGroup(synchronizer, config, segments, watermarks);
     }
     
     private Map<Segment, Long> getSegmentsForStreams(Set<String> streams) {
@@ -158,7 +160,8 @@ public class ReaderGroupImpl implements ReaderGroup, ReaderGroupMetrics {
             for (StreamCut cut : checkpoint.asImpl().getPositions().values()) {
                 positions.putAll(cut.getPositions());
             }
-            return Collections.singletonList(new ReaderGroupStateInit(config, positions));
+            Map<Segment, Long> watermarks = ReaderGroupStateManager.getWatermarks(segmentMetadataClientFactory, positions);
+            return Collections.singletonList(new ReaderGroupStateInit(config, positions, watermarks));
         });
     }
 
@@ -166,8 +169,9 @@ public class ReaderGroupImpl implements ReaderGroup, ReaderGroupMetrics {
     public void updateConfig(ReaderGroupConfig config, Set<String> streamNames) {
         @Cleanup
         StateSynchronizer<ReaderGroupState> synchronizer = createSynchronizer();
-        Map<Segment, Long> segments = getSegmentsForStreams(streamNames);
-        synchronizer.updateStateUnconditionally(new ReaderGroupStateInit(config, segments));
+        Map<Segment, Long> positions = getSegmentsForStreams(streamNames);
+        Map<Segment, Long> watermarks = ReaderGroupStateManager.getWatermarks(segmentMetadataClientFactory, positions);
+        synchronizer.updateStateUnconditionally(new ReaderGroupStateInit(config, positions, watermarks));
     }
 
     @Override

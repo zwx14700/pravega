@@ -32,6 +32,7 @@ import java.io.SequenceInputStream;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -42,6 +43,9 @@ import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
+
+import static io.pravega.segmentstore.contracts.Attributes.CREATION_TIME;
+import static io.pravega.segmentstore.contracts.Attributes.LAST_WRITE_TIME;
 
 /**
  * Read Index for a single StreamSegment. Integrates reading data from the following sources:
@@ -77,6 +81,8 @@ class StreamSegmentReadIndex implements CacheManager.Client, AutoCloseable {
     private boolean closed;
     private boolean merged;
     private final Object lock = new Object();
+    @GuardedBy("lock")
+    private final SortedIndex<WatermarkIndexEntry> watermarks;
 
     //endregion
 
@@ -112,6 +118,9 @@ class StreamSegmentReadIndex implements CacheManager.Client, AutoCloseable {
         this.storageReader = new StorageReader(metadata, storage, executor);
         this.executor = executor;
         this.summary = new ReadIndexSummary();
+        this.watermarks = new AvlTreeIndex<>();
+
+        initializeWatermarks();
     }
 
     //endregion
@@ -302,6 +311,22 @@ class StreamSegmentReadIndex implements CacheManager.Client, AutoCloseable {
     //region Index Updates
 
     /**
+     * Signals that the segment metadata has changed.
+     */
+    void updateMetadata() {
+        long traceId = LoggerHelpers.traceEnterWithContext(log, this.traceObjectId, "updateMetadata");
+
+        // Update the watermark index
+        long length = this.metadata.getLength();
+        Long lastWriteTime = this.metadata.getAttributes().get(LAST_WRITE_TIME);
+        if (lastWriteTime != null) {
+            updateWatermark(length - 1, lastWriteTime - 1L);
+        }
+
+        LoggerHelpers.traceLeave(log, this.traceObjectId, "updateMetadata", traceId);
+    }
+
+    /**
      * Appends the given range of bytes at the given offset.
      *
      * @param offset The offset within the StreamSegment to append at.
@@ -314,17 +339,23 @@ class StreamSegmentReadIndex implements CacheManager.Client, AutoCloseable {
         Exceptions.checkNotClosed(this.closed, this);
         Preconditions.checkState(!isMerged(), "StreamSegment has been merged into a different one. Cannot append more ReadIndex entries.");
 
-        if (data.length == 0) {
-            // Nothing to do. Adding empty read entries will only make our system slower and harder to debug.
-            return;
-        }
-
         // Metadata check can be done outside the write lock.
         // Adding at the end means that we always need to "catch-up" with Length. Check to see if adding
         // this entry will make us catch up to it or not.
         long length = this.metadata.getLength();
         long endOffset = offset + data.length;
         Exceptions.checkArgument(endOffset <= length, "offset", "The given range of bytes (%d-%d) is beyond the StreamSegment Length (%d).", offset, endOffset, length);
+
+        // Update the watermark index
+        Long lastWriteTime = this.metadata.getAttributes().get(LAST_WRITE_TIME);
+        if (lastWriteTime != null) {
+            updateWatermark(length - 1, lastWriteTime - 1L);
+        }
+
+        if (data.length == 0) {
+            // Nothing to do. Adding empty read entries will only make our system slower and harder to debug.
+            return;
+        }
 
         // Then append an entry for it in the ReadIndex. It's ok to insert into the cache outside of the lock here,
         // since there is no chance of competing with another write request for the same offset at the same time.
@@ -359,10 +390,6 @@ class StreamSegmentReadIndex implements CacheManager.Client, AutoCloseable {
         Exceptions.checkArgument(sourceMetadata.isSealed(), "sourceStreamSegmentIndex", "Given StreamSegmentReadIndex refers to a StreamSegment that is not sealed.");
 
         long sourceLength = sourceStreamSegmentIndex.getSegmentLength();
-        if (sourceLength == 0) {
-            // Nothing to do.
-            return;
-        }
 
         // Metadata check can be done outside the write lock.
         // Adding at the end means that we always need to "catch-up" with Length. Check to see if adding
@@ -370,6 +397,17 @@ class StreamSegmentReadIndex implements CacheManager.Client, AutoCloseable {
         long ourLength = getSegmentLength();
         long endOffset = offset + sourceLength;
         Exceptions.checkArgument(endOffset <= ourLength, "offset", "The given range of bytes(%d-%d) is beyond the StreamSegment Length (%d).", offset, endOffset, ourLength);
+
+        // Update the watermark index
+        Long lastWriteTime = this.metadata.getAttributes().get(LAST_WRITE_TIME);
+        if (lastWriteTime != null) {
+            updateWatermark(ourLength - 1, lastWriteTime - 1L);
+        }
+
+        if (sourceLength == 0) {
+            // Nothing to do. Adding empty read entries will only make our system slower and harder to debug.
+            return;
+        }
 
         // Check and record the merger (optimistically).
         RedirectIndexEntry newEntry = new RedirectIndexEntry(offset, sourceStreamSegmentIndex);
@@ -496,6 +534,51 @@ class StreamSegmentReadIndex implements CacheManager.Client, AutoCloseable {
 
     //endregion
 
+    // region Watermarking
+
+    /**
+     * Initializes the watermarks data structure.
+     */
+    private void initializeWatermarks() {
+        Long creationTime = metadata.getAttributes().get(CREATION_TIME);
+        watermarks.put(new WatermarkIndexEntry(-1L, creationTime != null ? creationTime - 1L : Long.MIN_VALUE));
+        Long lastWriteTime = metadata.getAttributes().get(LAST_WRITE_TIME);
+        if (lastWriteTime != null) {
+            watermarks.put(new WatermarkIndexEntry(metadata.getLength() - 1L, lastWriteTime - 1L));
+        }
+    }
+
+    /**
+     * Updates the watermark at the given offset, establishing a point in time strictly before the
+     * ingestion time of any subsequent data.
+     * @param streamSegmentOffset the offset.
+     * @param watermark the watermark (in ingestion time).
+     */
+    private void updateWatermark(long streamSegmentOffset, long watermark) {
+        log.debug("{}: Update Watermark (Offset = {}, Watermark = {}).", this.traceObjectId, streamSegmentOffset, watermark);
+        synchronized (this.lock) {
+            watermarks.put(new WatermarkIndexEntry(streamSegmentOffset, watermark));
+        }
+    }
+
+    /**
+     * Gets the exclusive minimum ingestion time of any data +subsequent to+ the given offset.
+     *
+     * <p>For example: the watermark at offset {@code -1} is one millisecond before the creation time of the segment,
+     * and the watermark at offset {@code x} is one millisecond before the write time of the data at {@code x}.
+     *
+     * @param streamSegmentOffset the offset (which need not be less than the stream length).
+     */
+    private WatermarkIndexEntry getWatermark(long streamSegmentOffset) {
+        synchronized (this.lock) {
+            WatermarkIndexEntry watermarkEntry = watermarks.getFloor(streamSegmentOffset);
+            assert watermarkEntry != null : "expected a watermark to exist";
+            return watermarkEntry;
+        }
+    }
+
+    //endregion
+
     //region Reading
 
     /**
@@ -510,13 +593,10 @@ class StreamSegmentReadIndex implements CacheManager.Client, AutoCloseable {
         // Get all eligible Future Reads which wait for data prior to the end offset.
         // Since we are not actually using this entry's data, there is no need to 'touch' it.
         ReadIndexEntry lastEntry;
+        WatermarkIndexEntry lastWatermark;
         synchronized (this.lock) {
             lastEntry = this.indexEntries.getLast();
-        }
-
-        if (lastEntry == null) {
-            // Nothing to do.
-            return;
+            lastWatermark = getWatermark(lastAppendedOffset);
         }
 
         Collection<FutureReadResultEntry> futureReads;
@@ -524,12 +604,16 @@ class StreamSegmentReadIndex implements CacheManager.Client, AutoCloseable {
         if (sealed) {
             // Get everything, even if some Future Reads are in the future - those will eventually return EndOfSegment.
             futureReads = this.futureReads.pollAll();
-        } else {
+        } else if (lastEntry != null){
             // Get only those up to the last offset of the last append.
             futureReads = this.futureReads.poll(lastEntry.getLastStreamSegmentOffset());
+            log.trace("{}: triggerFutureReads for available segment data (Offset = {}).", this.traceObjectId, lastEntry.getLastStreamSegmentOffset());
+        }
+        else {
+            futureReads = Collections.emptyList();
         }
 
-        log.debug("{}: triggerFutureReads (Count = {}, Offset = {}, Sealed = {}).", this.traceObjectId, lastEntry.getLastStreamSegmentOffset(), futureReads.size(), sealed);
+        log.debug("{}: triggerFutureReads (Count = {}, Sealed = {}).", this.traceObjectId, futureReads.size(), sealed);
 
         for (FutureReadResultEntry r : futureReads) {
             ReadResultEntry entry = getSingleReadResultEntry(r.getStreamSegmentOffset(), r.getRequestedReadLength());
@@ -555,6 +639,14 @@ class StreamSegmentReadIndex implements CacheManager.Client, AutoCloseable {
                 entryContent.thenAccept(r::complete);
                 FutureHelpers.exceptionListener(entryContent, r::fail);
             }
+        }
+
+        // Get Future Reads that should simply result in a watermark update
+        Collection<FutureReadResultEntry> watermarkReads = this.futureReads.poll(lastWatermark.getStreamSegmentOffset() + 1, lastWatermark.getWatermark());
+        log.debug("{}: triggerFutureReads (Offset = {}, Watermark = {}, Count = {}).", this.traceObjectId, lastWatermark.getStreamSegmentOffset(), lastWatermark.getWatermark(), watermarkReads.size());
+        for (FutureReadResultEntry r : watermarkReads) {
+            ReadResultEntryContents contents = new ReadResultEntryContents(new ByteArrayInputStream(new byte[0]), 0, lastWatermark.getWatermark());
+            r.complete(contents);
         }
     }
 
@@ -690,7 +782,8 @@ class StreamSegmentReadIndex implements CacheManager.Client, AutoCloseable {
 
         // Check to see if we are trying to read beyond the last offset of a sealed StreamSegment.
         if (!canReadAtOffset(resultStartOffset, false)) {
-            return new EndOfStreamSegmentReadResultEntry(resultStartOffset, maxLength);
+            WatermarkIndexEntry watermarkEntry = getWatermark(this.metadata.getLength() - 1);
+            return new EndOfStreamSegmentReadResultEntry(resultStartOffset, maxLength, watermarkEntry.getWatermark());
         }
 
         // Look up an entry in the index that contains our requested start offset.
@@ -747,11 +840,13 @@ class StreamSegmentReadIndex implements CacheManager.Client, AutoCloseable {
         }
 
         // Collect the contents of congruent Index Entries into a list, as long as we still encounter data in the cache.
+        long watermark;
         ArrayList<InputStream> contents = new ArrayList<>();
         do {
             assert FutureHelpers.isSuccessful(nextEntry.getContent()) : "Found CacheReadResultEntry that is not completed yet: " + nextEntry;
             val entryContents = nextEntry.getContent().join();
             contents.add(entryContents.getData());
+            watermark = entryContents.getWatermark();
             readLength += entryContents.getLength();
             if (readLength >= this.config.getMemoryReadMinLength() || readLength >= maxLength) {
                 break;
@@ -761,7 +856,7 @@ class StreamSegmentReadIndex implements CacheManager.Client, AutoCloseable {
         } while (nextEntry != null);
 
         // Coalesce the results into a single InputStream and return the result.
-        return new CacheReadResultEntry(resultStartOffset, new SequenceInputStream(Iterators.asEnumeration(contents.iterator())), readLength);
+        return new CacheReadResultEntry(resultStartOffset, new SequenceInputStream(Iterators.asEnumeration(contents.iterator())), readLength, watermark);
     }
 
     /**
@@ -816,7 +911,7 @@ class StreamSegmentReadIndex implements CacheManager.Client, AutoCloseable {
             // yield the right result. However, in order to recover from this without the caller's intervention, we pass
             // a pointer to getSingleReadResultEntry to the RedirectedReadResultEntry in case it fails with such an exception;
             // that class has logic in it to invoke it if needed and get the right entry.
-            result = new RedirectedReadResultEntry(result, entry.getStreamSegmentOffset(), this::getSingleReadResultEntry, this.executor);
+            result = new RedirectedReadResultEntry(result, entry.getStreamSegmentOffset(), this::getSingleReadResultEntry, offset -> getWatermark(offset).getWatermark(), this.executor);
         }
 
         return result;
@@ -875,7 +970,9 @@ class StreamSegmentReadIndex implements CacheManager.Client, AutoCloseable {
             entry.setGeneration(generation);
         }
 
-        return new CacheReadResultEntry(entry.getStreamSegmentOffset(), data, entryOffset, length);
+        long lastOffset = streamSegmentOffset + length - 1;
+        WatermarkIndexEntry watermarkEntry = getWatermark(lastOffset);
+        return new CacheReadResultEntry(entry.getStreamSegmentOffset(), data, entryOffset, length, watermarkEntry.getWatermark());
     }
 
     /**
@@ -893,8 +990,11 @@ class StreamSegmentReadIndex implements CacheManager.Client, AutoCloseable {
         Consumer<StorageReader.Result> doneCallback = result -> {
             ByteArraySegment data = result.getData();
 
+            long lastOffset = offset + data.getLength() - 1;
+            long watermark = getWatermark(lastOffset).getWatermark();
+
             // Make sure we invoke our callback first, before any chance of exceptions from insert() may block it.
-            successCallback.accept(new ReadResultEntryContents(data.getReader(), data.getLength()));
+            successCallback.accept(new ReadResultEntryContents(data.getReader(), data.getLength(), watermark));
             if (!result.isDerived()) {
                 // Only insert primary results into the cache. Derived results are always sub-portions of primaries
                 // and there is no need to insert them too, as they are already contained within.
@@ -950,7 +1050,8 @@ class StreamSegmentReadIndex implements CacheManager.Client, AutoCloseable {
      * @param maxLength           The maximum length of the Read, from the Offset of this ReadResultEntry.
      */
     private ReadResultEntryBase createFutureRead(long streamSegmentOffset, int maxLength) {
-        FutureReadResultEntry entry = new FutureReadResultEntry(streamSegmentOffset, maxLength);
+        WatermarkIndexEntry priorWatermark = getWatermark(streamSegmentOffset - 1);
+        FutureReadResultEntry entry = new FutureReadResultEntry(streamSegmentOffset, maxLength, priorWatermark.getWatermark());
         this.futureReads.add(entry);
         return entry;
     }

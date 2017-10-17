@@ -16,10 +16,12 @@ import io.pravega.segmentstore.server.DataCorruptionException;
 import io.pravega.segmentstore.server.ReadIndex;
 import io.pravega.segmentstore.server.logs.operations.CachedStreamSegmentAppendOperation;
 import io.pravega.segmentstore.server.logs.operations.Operation;
+import io.pravega.segmentstore.server.logs.operations.SegmentOperation;
 import io.pravega.segmentstore.server.logs.operations.StorageOperation;
 import io.pravega.segmentstore.server.logs.operations.StreamSegmentAppendOperation;
 import io.pravega.segmentstore.server.logs.operations.MergeTransactionOperation;
 import com.google.common.base.Preconditions;
+import io.pravega.segmentstore.server.logs.operations.UpdateAttributesOperation;
 
 import java.util.HashSet;
 import javax.annotation.concurrent.GuardedBy;
@@ -108,8 +110,8 @@ class MemoryStateUpdater {
 
         // Add entry to MemoryTransactionLog and ReadIndex/Cache. This callback is invoked from the QueueProcessor,
         // which always acks items in order of Sequence Number - so the entries should be ordered (but always check).
-        if (operation instanceof StorageOperation) {
-            addToReadIndex((StorageOperation) operation);
+        if (operation instanceof SegmentOperation) {
+            addToReadIndex((SegmentOperation) operation);
             if (operation instanceof StreamSegmentAppendOperation) {
                 // Transform a StreamSegmentAppendOperation into its corresponding Cached version.
                 try {
@@ -158,7 +160,7 @@ class MemoryStateUpdater {
      *
      * @param operation The operation to register.
      */
-    private void addToReadIndex(StorageOperation operation) {
+    private void addToReadIndex(SegmentOperation operation) {
         if (operation instanceof StreamSegmentAppendOperation) {
             // Record a StreamSegmentAppendOperation. Just in case, we also support this type of operation, but we need to
             // log a warning indicating so. This means we do not optimize memory properly, and we end up storing data
@@ -173,13 +175,15 @@ class MemoryStateUpdater {
             this.readIndex.beginMerge(mergeOperation.getStreamSegmentId(),
                     mergeOperation.getStreamSegmentOffset(),
                     mergeOperation.getTransactionSegmentId());
+        } else if (operation instanceof UpdateAttributesOperation) {
+            this.readIndex.updateMetadata(operation.getStreamSegmentId());
         } else {
             assert !(operation instanceof CachedStreamSegmentAppendOperation)
                     : "attempted to add a CachedStreamSegmentAppendOperation to the ReadIndex";
         }
 
         // Record recent activity on stream segment, if applicable.
-        // We should record this for any kind of StorageOperation. When we issue 'triggerFutureReads' on the readIndex,
+        // We should record this for any kind of SegmentOperation. When we issue 'triggerFutureReads' on the readIndex,
         // it should include 'sealed' StreamSegments too - any Future Reads waiting on that Offset will be cancelled.
         synchronized (this.readIndex) {
             this.recentStreamSegmentIds.add(operation.getStreamSegmentId());

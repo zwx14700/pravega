@@ -29,11 +29,12 @@ class CacheReadResultEntry extends ReadResultEntryBase {
      * @param data                The data buffer that contains the data.
      * @param dataOffset          The offset within data where this ReadResultEntry starts at.
      * @param dataLength          The length of the data that this ReadResultEntry has.
+     * @param watermark           A watermark representing the exclusive minimum ingestion time of subsequent content.
      */
-    CacheReadResultEntry(long streamSegmentOffset, byte[] data, int dataOffset, int dataLength) {
+    CacheReadResultEntry(long streamSegmentOffset, byte[] data, int dataOffset, int dataLength, long watermark) {
         super(ReadResultEntryType.Cache, streamSegmentOffset + dataOffset, dataLength);
         Exceptions.checkArrayRange(dataOffset, dataLength, data.length, "dataOffset", "dataLength");
-        complete(new ReadResultEntryContents(new ByteArrayInputStream(data, dataOffset, dataLength), dataLength));
+        complete(new ReadResultEntryContents(new ByteArrayInputStream(data, dataOffset, dataLength), dataLength, watermark));
     }
 
     /**
@@ -42,9 +43,10 @@ class CacheReadResultEntry extends ReadResultEntryBase {
      * @param streamSegmentOffset The offset within the StreamSegment where this ReadResultEntry starts at.
      * @param data                An InputStream representing the data to be read.
      * @param dataLength          The length of the data that this ReadResultEntry has (length of the given InputStream).
+     * @param watermark           A watermark representing the exclusive minimum ingestion time of subsequent content.
      */
-    CacheReadResultEntry(long streamSegmentOffset, InputStream data, int dataLength) {
+    CacheReadResultEntry(long streamSegmentOffset, InputStream data, int dataLength, long watermark) {
         super(ReadResultEntryType.Cache, streamSegmentOffset, dataLength);
-        complete(new ReadResultEntryContents(data, dataLength));
+        complete(new ReadResultEntryContents(data, dataLength, watermark));
     }
 }

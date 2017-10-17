@@ -25,17 +25,20 @@ import java.util.concurrent.TimeUnit;
  * Mock EventStreamReader.
  */
 public class EventStreamReaderMock<T> implements EventStreamReader<T> {
-    BlockingQueue<T> queue;
+    BlockingQueue<EventRead<T>> queue;
 
-    public EventStreamReaderMock(BlockingQueue<T> queue) {
+    public EventStreamReaderMock(BlockingQueue<EventRead<T>> queue) {
         this.queue = queue;
     }
 
     @Override
     @SneakyThrows(value = InterruptedException.class)
     public EventRead<T> readNextEvent(long timeout) throws ReinitializationRequiredException {
-        T event = queue.poll(timeout, TimeUnit.MILLISECONDS);
-        return new EventReadImpl<>(null, event, null, null, null);
+        EventRead<T> eventRead = queue.poll(timeout, TimeUnit.MILLISECONDS);
+        if (eventRead == null) {
+            return new EventReadImpl<>(null, null, null, null, null, null);
+        }
+        return eventRead;
     }
 
     @Override

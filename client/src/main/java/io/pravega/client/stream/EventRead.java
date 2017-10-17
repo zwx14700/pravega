@@ -11,17 +11,30 @@ package io.pravega.client.stream;
 
 import java.util.concurrent.ScheduledExecutorService;
 /**
- * An event that was read from a stream or a checkpoint marker if one has been requested.
+ * An event that was read from a stream, a checkpoint marker if one has been requested, or a watermark
+ * if the reader's time domain is {@code IngestionTime}.
  * <p>
  * A checkpoint is an indication that the reading application should persist its state to durable storage
  * before reading further. A checkpoint also represents a point where events waiting to be read may be
  * rebalanced among the readers in a group. So before a checkpoint one reader might be handling all of the
  * events sent with routing key X but afterwards it may be a different reader.
- * 
+ * <p>
+ * A watermark is an indication that a certain point in time has passed on the time clock (of the configured
+ * time domain), based on the current position in the stream.
+ *
  * @param <T> The type of the event.
  */
 public interface EventRead<T> {
-    
+
+    /**
+     * A boolean indicating if this is an event.
+     *
+     * @return true if this is an event.
+     */
+    default boolean isEvent() {
+        return !isCheckpoint() && !isWatermark();
+    }
+
     /**
      * Returns the event that is wrapped in this EventRead or null a timeout occurred or if a checkpoint was requested.
      *
@@ -61,4 +74,19 @@ public interface EventRead<T> {
      * @return The name of the checkpoint
      */
     String getCheckpointName();
+
+    /**
+     * A boolean indicating if this is a watermark. In which case {@link #getWatermark()} will be non-null
+     * and {@link #getEvent()} will be null.
+     *
+     * @return true if this is a watermark.
+     */
+    boolean isWatermark();
+
+    /**
+     * Returns a watermark representing the point in time (on the time clock) that was reached in the stream.
+     *
+     * @return The watermark time.
+     */
+    Long getWatermark();
 }

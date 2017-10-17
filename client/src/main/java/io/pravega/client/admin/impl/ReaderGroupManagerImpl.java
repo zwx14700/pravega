@@ -12,6 +12,8 @@ package io.pravega.client.admin.impl;
 import io.pravega.client.ClientFactory;
 import io.pravega.client.admin.ReaderGroupManager;
 import io.pravega.client.netty.impl.ConnectionFactory;
+import io.pravega.client.segment.impl.SegmentMetadataClientFactory;
+import io.pravega.client.segment.impl.SegmentMetadataClientFactoryImpl;
 import io.pravega.client.state.SynchronizerConfig;
 import io.pravega.client.stream.InvalidStreamException;
 import io.pravega.client.stream.ReaderGroup;
@@ -46,6 +48,7 @@ public class ReaderGroupManagerImpl implements ReaderGroupManager {
     private final ClientFactory clientFactory;
     private final Controller controller;
     private final ConnectionFactory connectionFactory;
+    private final SegmentMetadataClientFactory segmentMetadataClientFactory;
 
     public ReaderGroupManagerImpl(String scope, URI controllerUri, ConnectionFactory connectionFactory) {
         this.scope = scope;
@@ -53,6 +56,7 @@ public class ReaderGroupManagerImpl implements ReaderGroupManager {
                 connectionFactory.getInternalExecutor());
         this.connectionFactory = connectionFactory;
         this.clientFactory = new ClientFactoryImpl(scope, this.controller, connectionFactory);
+        this.segmentMetadataClientFactory = new SegmentMetadataClientFactoryImpl(this.controller, connectionFactory);
     }
 
     public ReaderGroupManagerImpl(String scope, Controller controller, ClientFactory clientFactory, ConnectionFactory connectionFactory) {
@@ -60,6 +64,7 @@ public class ReaderGroupManagerImpl implements ReaderGroupManager {
         this.clientFactory = clientFactory;
         this.controller = controller;
         this.connectionFactory = connectionFactory;
+        this.segmentMetadataClientFactory = new SegmentMetadataClientFactoryImpl(this.controller, connectionFactory);
     }
 
     private Stream createStreamHelper(String streamName, StreamConfiguration config) {
@@ -83,7 +88,7 @@ public class ReaderGroupManagerImpl implements ReaderGroupManager {
                                                                                   .build());
         SynchronizerConfig synchronizerConfig = SynchronizerConfig.builder().build();
         ReaderGroupImpl result = new ReaderGroupImpl(scope, groupName, synchronizerConfig, new JavaSerializer<>(),
-                                                     new JavaSerializer<>(), clientFactory, controller, connectionFactory);
+                                                     new JavaSerializer<>(), clientFactory, controller, connectionFactory, segmentMetadataClientFactory);
         result.initializeGroup(config, streams);
         return result;
     }
@@ -109,7 +114,7 @@ public class ReaderGroupManagerImpl implements ReaderGroupManager {
     public ReaderGroup getReaderGroup(String groupName) {
         SynchronizerConfig synchronizerConfig = SynchronizerConfig.builder().build();
         return new ReaderGroupImpl(scope, groupName, synchronizerConfig, new JavaSerializer<>(), new JavaSerializer<>(),
-                                   clientFactory, controller, connectionFactory);
+                                   clientFactory, controller, connectionFactory, segmentMetadataClientFactory);
     }
 
     @Override

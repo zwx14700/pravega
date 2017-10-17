@@ -33,6 +33,7 @@ import io.pravega.segmentstore.server.logs.operations.Operation;
 import io.pravega.segmentstore.server.logs.operations.ProbeOperation;
 import io.pravega.segmentstore.server.logs.operations.StreamSegmentAppendOperation;
 import io.pravega.segmentstore.server.logs.operations.StreamSegmentSealOperation;
+import io.pravega.segmentstore.server.logs.operations.TemporalOperation;
 import io.pravega.segmentstore.storage.DurableDataLogException;
 import io.pravega.segmentstore.storage.Storage;
 import io.pravega.shared.segment.StreamSegmentNameUtils;
@@ -61,6 +62,8 @@ import lombok.Cleanup;
 import lombok.RequiredArgsConstructor;
 import lombok.val;
 import org.junit.Assert;
+
+import static io.pravega.segmentstore.contracts.Attributes.LAST_WRITE_TIME;
 
 /**
  * Base class for all Operation Log-based classes (i.e., DurableLog and OperationProcessor).
@@ -267,8 +270,9 @@ abstract class OperationLogTestBase extends ThreadPooledTestSuite {
             }
         }
 
-        // Verify the end state of each stream segment (length, sealed).
+        // Verify the end state of each stream segment (length, sealed, last_write_time).
         AbstractMap<Long, Integer> expectedLengths = getExpectedLengths(operations);
+        AbstractMap<Long, Long> expectedLastWriteTimes = getExpectedLastWriteTimes(operations);
         for (long streamSegmentId : streamSegmentIds) {
             SegmentMetadata segmentMetadata = metadata.getStreamSegmentMetadata(streamSegmentId);
             if (invalidStreamSegmentIds.contains(streamSegmentId)) {
@@ -279,6 +283,8 @@ abstract class OperationLogTestBase extends ThreadPooledTestSuite {
                         expectSegmentsSealed, segmentMetadata.isSealed());
                 Assert.assertEquals("Unexpected length for StreamSegment " + streamSegmentId,
                         (int) expectedLengths.getOrDefault(streamSegmentId, 0), segmentMetadata.getLength());
+                Assert.assertEquals("Unexpected LAST_WRITE_TIME attribute for StreamSegment " + streamSegmentId,
+                        expectedLastWriteTimes.getOrDefault(streamSegmentId, null), segmentMetadata.getAttributes().get(LAST_WRITE_TIME));
             }
         }
     }
@@ -286,13 +292,17 @@ abstract class OperationLogTestBase extends ThreadPooledTestSuite {
     void performReadIndexChecks(Collection<OperationWithCompletion> operations, ReadIndex readIndex) throws Exception {
         AbstractMap<Long, Integer> expectedLengths = getExpectedLengths(operations);
         AbstractMap<Long, InputStream> expectedData = getExpectedContents(operations);
+        AbstractMap<Long, Long> expectedLastWriteTimes = getExpectedLastWriteTimes(operations);
         for (Map.Entry<Long, InputStream> e : expectedData.entrySet()) {
             int expectedLength = expectedLengths.getOrDefault(e.getKey(), -1);
+            long expectedWatermark = expectedLastWriteTimes.get(e.getKey()) - 1L;
             @Cleanup
             ReadResult readResult = readIndex.read(e.getKey(), 0, expectedLength, TIMEOUT);
             int readLength = 0;
+            long readWatermark = Long.MIN_VALUE;
             while (readResult.hasNext()) {
                 ReadResultEntryContents entry = readResult.next().getContent().join();
+                readWatermark = entry.getWatermark();
                 int length = entry.getLength();
                 readLength += length;
                 int streamSegmentOffset = expectedLengths.getOrDefault(e.getKey(), 0);
@@ -302,6 +312,7 @@ abstract class OperationLogTestBase extends ThreadPooledTestSuite {
             }
 
             Assert.assertEquals("Not enough bytes were read from the ReadIndex for StreamSegment " + e.getKey(), expectedLength, readLength);
+            Assert.assertEquals("Unexpected watermark from the ReadIndex for StreamSegment " + e.getKey(), expectedWatermark, readWatermark);
         }
     }
 
@@ -389,6 +400,28 @@ abstract class OperationLogTestBase extends ThreadPooledTestSuite {
         HashMap<Long, InputStream> result = new HashMap<>();
         for (Map.Entry<Long, List<ByteArrayInputStream>> e : partialContents.entrySet()) {
             result.put(e.getKey(), new SequenceInputStream(Iterators.asEnumeration(e.getValue().iterator())));
+        }
+
+        return result;
+    }
+
+    private AbstractMap<Long, Long> getExpectedLastWriteTimes(Collection<OperationWithCompletion> operations) {
+        HashMap<Long, Long> result = new HashMap<>();
+        for (OperationWithCompletion o : operations) {
+            Assert.assertTrue("Operation is not completed.", o.completion.isDone());
+            if (o.completion.isCompletedExceptionally()) {
+                // This is a failed operation; ignore it.
+                continue;
+            }
+
+            if (o.operation instanceof StreamSegmentAppendOperation) {
+                StreamSegmentAppendOperation appendOperation = (StreamSegmentAppendOperation) o.operation;
+                result.put(appendOperation.getStreamSegmentId(), appendOperation.getTimestamp());
+            } else if (o.operation instanceof MergeTransactionOperation) {
+                MergeTransactionOperation mergeOperation = (MergeTransactionOperation) o.operation;
+                result.put(mergeOperation.getStreamSegmentId(), mergeOperation.getTimestamp());
+                result.remove(mergeOperation.getTransactionSegmentId());
+            }
         }
 
         return result;

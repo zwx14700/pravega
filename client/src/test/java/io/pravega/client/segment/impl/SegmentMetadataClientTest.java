@@ -36,7 +36,7 @@ import static org.mockito.Mockito.mock;
 public class SegmentMetadataClientTest {
     
     @Test(timeout = 10000)
-    public void testCurrentStreamLength() throws Exception {
+    public void testGetSegmentInfo() throws Exception {
         Segment segment = new Segment("scope", "testRetry", 4);
         PravegaNodeUri endpoint = new PravegaNodeUri("localhost", 0);
         MockConnectionFactoryImpl cf = new MockConnectionFactoryImpl();
@@ -49,13 +49,23 @@ public class SegmentMetadataClientTest {
         Mockito.doAnswer(new Answer<Void>() {
             @Override
             public Void answer(InvocationOnMock invocation) throws Throwable {
-                processor.streamSegmentInfo(new StreamSegmentInfo(1, segment.getScopedName(), true, false, false, 0,
+                processor.streamSegmentInfo(new StreamSegmentInfo(1, segment.getScopedName(), true, false, false, 42L, 0,
                                                                   123));
                 return null;
             }
         }).when(connection).send(new WireCommands.GetStreamSegmentInfo(1, segment.getScopedName()));
         long length = client.fetchCurrentStreamLength();
         assertEquals(123, length);
+        Mockito.doAnswer(new Answer<Void>() {
+            @Override
+            public Void answer(InvocationOnMock invocation) throws Throwable {
+                processor.streamSegmentInfo(new StreamSegmentInfo(2, segment.getScopedName(), true, false, false, 42L, 0,
+                        123));
+                return null;
+            }
+        }).when(connection).send(new WireCommands.GetStreamSegmentInfo(2, segment.getScopedName()));
+        long creationTime = client.fetchCreationTime();
+        assertEquals(42L, creationTime);
     }
 
     @Test(timeout = 10000)
@@ -127,7 +137,7 @@ public class SegmentMetadataClientTest {
         Mockito.doAnswer(new Answer<Void>() {
             @Override
             public Void answer(InvocationOnMock invocation) throws Throwable {
-                processor.streamSegmentInfo(new StreamSegmentInfo(2, segment.getScopedName(), true, false, false, 0,
+                processor.streamSegmentInfo(new StreamSegmentInfo(2, segment.getScopedName(), true, false, false, 0, 0,
                                                                   123));
                 return null;
             }
@@ -167,7 +177,7 @@ public class SegmentMetadataClientTest {
         Mockito.doAnswer(new Answer<Void>() {
             @Override
             public Void answer(InvocationOnMock invocation) throws Throwable {
-                processor.get().streamSegmentInfo(new StreamSegmentInfo(3, segment.getScopedName(), true, false, false, 0,
+                processor.get().streamSegmentInfo(new StreamSegmentInfo(3, segment.getScopedName(), true, false, false, 0, 0,
                                                                   123));
                 return null;
             }

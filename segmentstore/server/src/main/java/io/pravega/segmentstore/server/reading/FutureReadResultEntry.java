@@ -16,14 +16,27 @@ import io.pravega.segmentstore.contracts.ReadResultEntryType;
  * StreamSegment's Length)
  */
 class FutureReadResultEntry extends ReadResultEntryBase {
+
+    private final long watermark;
+
+    /**
+     * Gets the watermark (exclusive minimum ingestion time) of the future content.
+     */
+    @Override
+    public long getWatermark() {
+        return watermark;
+    }
+
     /**
      * Creates a new instance of the FutureReadResultEntry class.
      *
      * @param streamSegmentOffset The offset in the StreamSegment that this entry starts at.
      * @param requestedReadLength The maximum number of bytes requested for read.
+     * @param watermark           The watermark (exclusive minimum ingestion time) of the future content.
      * @throws IllegalArgumentException If type is not ReadResultEntryType.Future or ReadResultEntryType.Storage.
      */
-    FutureReadResultEntry(long streamSegmentOffset, int requestedReadLength) {
+    FutureReadResultEntry(long streamSegmentOffset, int requestedReadLength, long watermark) {
         super(ReadResultEntryType.Future, streamSegmentOffset, requestedReadLength);
+        this.watermark = watermark;
     }
 }

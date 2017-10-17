@@ -17,6 +17,7 @@ import io.pravega.segmentstore.server.SegmentContainerFactory;
 import io.pravega.segmentstore.storage.StorageFactory;
 import com.google.common.base.Preconditions;
 
+import java.time.Clock;
 import java.util.concurrent.ScheduledExecutorService;
 
 /**
@@ -29,6 +30,7 @@ public class StreamSegmentContainerFactory implements SegmentContainerFactory {
     private final WriterFactory writerFactory;
     private final StorageFactory storageFactory;
     private final ScheduledExecutorService executor;
+    private final Clock clock;
 
     /**
      * Creates a new instance of the StreamSegmentContainerFactory.
@@ -39,10 +41,11 @@ public class StreamSegmentContainerFactory implements SegmentContainerFactory {
      * @param writerFactory       The Writer Factory to use for every container creation.
      * @param storageFactory      The Storage Factory to use for every container creation.
      * @param executor            The Executor to use for running async tasks.
+     * @param clock               The clock for temporal operations.
      * @throws NullPointerException If any of the arguments are null.
      */
     public StreamSegmentContainerFactory(ContainerConfig config, OperationLogFactory operationLogFactory, ReadIndexFactory readIndexFactory,
-                                         WriterFactory writerFactory, StorageFactory storageFactory, ScheduledExecutorService executor) {
+                                         WriterFactory writerFactory, StorageFactory storageFactory, ScheduledExecutorService executor, Clock clock) {
         Preconditions.checkNotNull(config, "config");
         Preconditions.checkNotNull(operationLogFactory, "operationLogFactory");
         Preconditions.checkNotNull(readIndexFactory, "readIndexFactory");
@@ -56,11 +59,12 @@ public class StreamSegmentContainerFactory implements SegmentContainerFactory {
         this.writerFactory = writerFactory;
         this.storageFactory = storageFactory;
         this.executor = executor;
+        this.clock = clock;
     }
 
     @Override
     public SegmentContainer createStreamSegmentContainer(int containerId) {
         return new StreamSegmentContainer(containerId, config, this.operationLogFactory, this.readIndexFactory,
-                this.writerFactory, this.storageFactory, this.executor);
+                this.writerFactory, this.storageFactory, this.executor, this.clock);
     }
 }

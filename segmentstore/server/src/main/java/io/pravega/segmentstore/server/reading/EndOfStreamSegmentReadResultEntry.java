@@ -18,14 +18,27 @@ import java.time.Duration;
  * The getContent() method will throw an IllegalStateException if invoked.
  */
 class EndOfStreamSegmentReadResultEntry extends ReadResultEntryBase {
+
+    private final long watermark;
+
+    /**
+     * Gets a watermark representing the exclusive minimum ingestion time of content in successive segments.
+     */
+    @Override
+    public long getWatermark() {
+        return watermark;
+    }
+
     /**
      * Constructor.
      *
      * @param streamSegmentOffset The offset in the StreamSegment that this entry starts at.
      * @param requestedReadLength The maximum number of bytes requested for read.
+     * @param watermark           A watermark representing the exclusive minimum ingestion time of content in successor segments.
      */
-    EndOfStreamSegmentReadResultEntry(long streamSegmentOffset, int requestedReadLength) {
+    EndOfStreamSegmentReadResultEntry(long streamSegmentOffset, int requestedReadLength, long watermark) {
         super(ReadResultEntryType.EndOfStreamSegment, streamSegmentOffset, requestedReadLength);
+        this.watermark = watermark;
         fail(new IllegalStateException("EndOfStreamSegmentReadResultEntry does not have any content."));
     }
 

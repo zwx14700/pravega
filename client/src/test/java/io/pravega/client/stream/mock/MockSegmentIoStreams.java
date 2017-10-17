@@ -19,19 +19,20 @@ import io.pravega.client.segment.impl.SegmentSealedException;
 import io.pravega.client.stream.impl.PendingEvent;
 import io.pravega.shared.protocol.netty.WireCommands;
 import java.nio.ByteBuffer;
+import java.time.Clock;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import javax.annotation.concurrent.GuardedBy;
-import lombok.RequiredArgsConstructor;
 import lombok.Synchronized;
 
-@RequiredArgsConstructor
 public class MockSegmentIoStreams implements SegmentOutputStream, SegmentInputStream, SegmentMetadataClient {
 
     private final Segment segment;
+    private final Clock clock;
     @GuardedBy("$lock")
     private int readIndex; 
     @GuardedBy("$lock")
@@ -42,9 +43,22 @@ public class MockSegmentIoStreams implements SegmentOutputStream, SegmentInputSt
     private final ArrayList<ByteBuffer> dataWritten = new ArrayList<>();
     @GuardedBy("$lock")
     private final ArrayList<Long> offsetList = new ArrayList<>();
+    private final long creationTime;
+    @GuardedBy("$lock")
+    private ArrayList<Long> timestampList = new ArrayList<>();
     private final AtomicBoolean close = new AtomicBoolean();
     private final ConcurrentHashMap<SegmentAttribute, Long> attributes = new ConcurrentHashMap<>();
-    
+
+    public MockSegmentIoStreams(Segment segment) {
+        this(segment, Clock.systemDefaultZone());
+    }
+
+    public MockSegmentIoStreams(Segment segment, Clock clock) {
+        this.segment = segment;
+        this.clock = clock;
+        this.creationTime = clock.millis();
+    }
+
     @Override
     @Synchronized
     public void setOffset(long offset) {
@@ -71,7 +85,20 @@ public class MockSegmentIoStreams implements SegmentOutputStream, SegmentInputSt
         return writeOffset;
     }
 
-    
+    @Override
+    public long fetchCreationTime() {
+        return creationTime;
+    }
+
+    @Override
+    public long getWatermark() {
+        if (readIndex <= 0 || eventsWritten <= 0) {
+            return creationTime;
+        }
+        int index = readIndex >= eventsWritten ? eventsWritten - 1 : readIndex - 1;
+        return timestampList.get(index) - 1L;
+    }
+
     @Override
     public ByteBuffer read() throws EndOfSegmentException {
         return read(Long.MAX_VALUE);
@@ -94,6 +121,7 @@ public class MockSegmentIoStreams implements SegmentOutputStream, SegmentInputSt
         if (event.getExpectedOffset() == null || event.getExpectedOffset() == writeOffset) {
             dataWritten.add(event.getData().slice());
             offsetList.add(writeOffset);
+            timestampList.add(clock.millis());
             eventsWritten++;
             writeOffset += event.getData().remaining() + WireCommands.TYPE_PLUS_LENGTH_SIZE;
             event.getAckFuture().complete(true);
@@ -153,4 +181,7 @@ public class MockSegmentIoStreams implements SegmentOutputStream, SegmentInputSt
         return close.get();
     }
 
+    public static long getCreationTime(Segment segment) {
+        return Instant.EPOCH.plusSeconds(segment.getSegmentNumber()).toEpochMilli();
+    }
 }

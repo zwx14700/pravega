@@ -37,6 +37,8 @@ import io.pravega.segmentstore.storage.mocks.InMemoryCacheFactory;
 import io.pravega.segmentstore.storage.mocks.InMemoryDurableDataLogFactory;
 import io.pravega.segmentstore.storage.mocks.InMemoryStorageFactory;
 import io.pravega.shared.segment.SegmentToContainerMapper;
+
+import java.time.Clock;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicReference;
@@ -71,6 +73,7 @@ public final class ServiceBuilder implements AutoCloseable {
     private Function<ComponentSetup, SegmentContainerManager> segmentContainerManagerCreator;
     private Function<ComponentSetup, CacheFactory> cacheFactoryCreator;
     private Function<ComponentSetup, StreamSegmentStore> streamSegmentStoreCreator;
+    private Clock clock;
 
     //endregion
 
@@ -105,6 +108,8 @@ public final class ServiceBuilder implements AutoCloseable {
         this.cacheFactoryCreator = notConfiguredCreator(CacheFactory.class);
         this.streamSegmentStoreCreator = notConfiguredCreator(StreamSegmentStore.class);
         this.threadPoolMetrics = new SegmentStoreMetrics.ThreadPool(this.executorService);
+
+        this.clock = Clock.systemDefaultZone();
     }
 
     private static ScheduledExecutorService createExecutorService(ServiceConfig serviceConfig) {
@@ -210,6 +215,12 @@ public final class ServiceBuilder implements AutoCloseable {
         return this;
     }
 
+    public ServiceBuilder withClock(Clock clock) {
+        Preconditions.checkNotNull(clock, "clock");
+        this.clock = clock;
+        return this;
+    }
+
     //endregion
 
     //region Service Builder
@@ -259,7 +270,7 @@ public final class ServiceBuilder implements AutoCloseable {
         OperationLogFactory operationLogFactory = getSingleton(this.operationLogFactory, this::createOperationLogFactory);
         WriterFactory writerFactory = getSingleton(this.writerFactory, this::createWriterFactory);
         ContainerConfig containerConfig = this.serviceBuilderConfig.getConfig(ContainerConfig::builder);
-        return new StreamSegmentContainerFactory(containerConfig, operationLogFactory, readIndexFactory, writerFactory, storageFactory, this.executorService);
+        return new StreamSegmentContainerFactory(containerConfig, operationLogFactory, readIndexFactory, writerFactory, storageFactory, this.executorService, this.clock);
     }
 
     private SegmentContainerRegistry createSegmentContainerRegistry() {
@@ -270,7 +281,7 @@ public final class ServiceBuilder implements AutoCloseable {
     private OperationLogFactory createOperationLogFactory() {
         DurableDataLogFactory dataLogFactory = getSingleton(this.dataLogFactory, this.dataLogFactoryCreator);
         DurableLogConfig durableLogConfig = this.serviceBuilderConfig.getConfig(DurableLogConfig::builder);
-        return new DurableLogFactory(durableLogConfig, dataLogFactory, this.executorService);
+        return new DurableLogFactory(durableLogConfig, dataLogFactory, this.executorService, this.clock);
     }
 
     private <T> T getSingleton(AtomicReference<T> instance, Function<ComponentSetup, T> creator) {

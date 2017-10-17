@@ -13,6 +13,7 @@ import io.pravega.common.Exceptions;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Iterator;
 import java.util.List;
 import java.util.PriorityQueue;
 import java.util.concurrent.CancellationException;
@@ -91,6 +92,32 @@ class FutureReadResultEntryCollection implements AutoCloseable {
             // first entry overlaps the given offset by at least one byte, extract and return it.
             while (this.reads.size() > 0 && this.reads.peek().getStreamSegmentOffset() <= maxOffset) {
                 result.add(this.reads.poll());
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * Finds the Result Entries that have a starting offset on or after the given offset and with a stale watermark,
+     * removes them from the collection, and returns them.  This method identifies tail reads that should complete now
+     * to convey an updated watermark.
+     *
+     * @param minOffset The offset to query against.
+     * @param watermark A watermark representing the minimum ingestion time of (potentially future) content at {@code minOffset}.
+     */
+    Collection<FutureReadResultEntry> poll(long minOffset, long watermark) {
+        List<FutureReadResultEntry> result = new ArrayList<>();
+        synchronized (this.reads) {
+            Exceptions.checkNotClosed(this.closed, this);
+
+            // identify entries with a stale watermark
+            for (Iterator<FutureReadResultEntry> it = this.reads.iterator(); it.hasNext();) {
+                FutureReadResultEntry entry = it.next();
+                if (entry.getStreamSegmentOffset() >= minOffset && entry.getWatermark() < watermark) {
+                    result.add(entry);
+                    it.remove();
+                }
             }
         }
 

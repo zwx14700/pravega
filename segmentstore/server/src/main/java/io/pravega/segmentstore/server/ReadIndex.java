@@ -62,6 +62,13 @@ public interface ReadIndex extends AutoCloseable {
     void completeMerge(long targetStreamSegmentId, long sourceStreamSegmentId);
 
     /**
+     * Updates the metadata for the given StreamSegmentId.
+     *
+     * @param streamSegmentId The Id of the StreamSegment to update.
+     */
+    void updateMetadata(long streamSegmentId);
+
+    /**
      * Reads a contiguous sequence of bytes of the given length starting at the given offset from the given Segment.
      * Every byte in the range must meet the following conditions:
      * <ul>

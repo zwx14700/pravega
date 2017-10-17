@@ -37,6 +37,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicLong;
+
 import lombok.Cleanup;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
@@ -92,8 +94,16 @@ public class PravegaRequestProcessorTest {
     }
 
     private static class TestReadResultEntry extends ReadResultEntryBase {
+        private final long watermark;
+
         TestReadResultEntry(ReadResultEntryType type, long streamSegmentOffset, int requestedReadLength) {
             super(type, streamSegmentOffset, requestedReadLength);
+            this.watermark = Long.MIN_VALUE;
+        }
+
+        TestReadResultEntry(ReadResultEntryType type, long streamSegmentOffset, int requestedReadLength, long watermark) {
+            super(type, streamSegmentOffset, requestedReadLength);
+            this.watermark = watermark;
         }
 
         @Override
@@ -110,6 +120,13 @@ public class PravegaRequestProcessorTest {
         public void requestContent(Duration timeout) {
             Preconditions.checkState(getType() != ReadResultEntryType.EndOfStreamSegment, "EndOfStreamSegmentReadResultEntry does not have any content.");
         }
+
+        @Override
+        public long getWatermark() {
+            Preconditions.checkState(getType() == ReadResultEntryType.EndOfStreamSegment || getType() == ReadResultEntryType.Future,
+                    "TestReadResultEntry does not have a watermark.");
+            return watermark;
+        }
     }
 
     @Test(timeout = 20000)
@@ -124,7 +141,7 @@ public class PravegaRequestProcessorTest {
         PravegaRequestProcessor processor = new PravegaRequestProcessor(store, connection);
 
         TestReadResultEntry entry1 = new TestReadResultEntry(ReadResultEntryType.Cache, 0, readLength);
-        entry1.complete(new ReadResultEntryContents(new ByteArrayInputStream(data), data.length));
+        entry1.complete(new ReadResultEntryContents(new ByteArrayInputStream(data), data.length, 42L));
         TestReadResultEntry entry2 = new TestReadResultEntry(ReadResultEntryType.Future, data.length, readLength);
 
         List<ReadResultEntry> results = new ArrayList<>();
@@ -137,10 +154,10 @@ public class PravegaRequestProcessorTest {
         // Execute and Verify readSegment calling stack in connection and store is executed as design.
         processor.readSegment(new WireCommands.ReadSegment(streamSegmentName, 0, readLength));
         verify(store).read(streamSegmentName, 0, readLength, PravegaRequestProcessor.TIMEOUT);
-        verify(connection).send(new WireCommands.SegmentRead(streamSegmentName, 0, true, false, ByteBuffer.wrap(data)));
+        verify(connection).send(new WireCommands.SegmentRead(streamSegmentName, 0, 42L, true, false, ByteBuffer.wrap(data)));
         verifyNoMoreInteractions(connection);
         verifyNoMoreInteractions(store);
-        entry2.complete(new ReadResultEntryContents(new ByteArrayInputStream(data), data.length));
+        entry2.complete(new ReadResultEntryContents(new ByteArrayInputStream(data), data.length, 42L + 1));
         verifyNoMoreInteractions(connection);
         verifyNoMoreInteractions(store);
     }
@@ -155,7 +172,7 @@ public class PravegaRequestProcessorTest {
         ServerConnection connection = mock(ServerConnection.class);
         PravegaRequestProcessor processor = new PravegaRequestProcessor(store, connection);
 
-        TestReadResultEntry entry1 = new TestReadResultEntry(ReadResultEntryType.EndOfStreamSegment, 0, readLength);
+        TestReadResultEntry entry1 = new TestReadResultEntry(ReadResultEntryType.EndOfStreamSegment, 0, readLength, 42L);
 
         List<ReadResultEntry> results = new ArrayList<>();
         results.add(entry1);
@@ -166,7 +183,7 @@ public class PravegaRequestProcessorTest {
         // Execute and Verify readSegment calling stack in connection and store is executed as design.
         processor.readSegment(new WireCommands.ReadSegment(streamSegmentName, 0, readLength));
         verify(store).read(streamSegmentName, 0, readLength, PravegaRequestProcessor.TIMEOUT);
-        verify(connection).send(new WireCommands.SegmentRead(streamSegmentName, 0, false, true, ByteBuffer.wrap(new byte[0])));
+        verify(connection).send(new WireCommands.SegmentRead(streamSegmentName, 0, 42L, false, true, ByteBuffer.wrap(new byte[0])));
         verifyNoMoreInteractions(connection);
         verifyNoMoreInteractions(store);
     }

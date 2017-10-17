@@ -23,7 +23,7 @@ import lombok.Getter;
 /**
  * Log Operation that represents an Update to a Segment's Attribute collection.
  */
-public class UpdateAttributesOperation extends MetadataOperation implements SegmentOperation {
+public class UpdateAttributesOperation extends MetadataOperation implements SegmentOperation, TemporalOperation {
     //region Members
 
     private static final byte CURRENT_VERSION = 0;
@@ -31,6 +31,7 @@ public class UpdateAttributesOperation extends MetadataOperation implements Segm
     private long streamSegmentId;
     @Getter
     private Collection<AttributeUpdate> attributeUpdates;
+    private long timestamp;
 
     //endregion
 
@@ -48,10 +49,25 @@ public class UpdateAttributesOperation extends MetadataOperation implements Segm
 
         this.streamSegmentId = streamSegmentId;
         this.attributeUpdates = attributeUpdates;
+        this.timestamp = Long.MIN_VALUE;
     }
 
     protected UpdateAttributesOperation(OperationHeader header, DataInputStream source) throws SerializationException {
         super(header, source);
+    }
+
+    //endregion
+
+    //region TemporalOperation Properties
+
+    @Override
+    public long getTimestamp() {
+        return this.timestamp;
+    }
+
+    @Override
+    public void setTimestamp(long timestamp) {
+        this.timestamp = timestamp;
     }
 
     //endregion
@@ -67,6 +83,7 @@ public class UpdateAttributesOperation extends MetadataOperation implements Segm
     protected void serializeContent(DataOutputStream target) throws IOException {
         target.writeByte(CURRENT_VERSION);
         target.writeLong(this.streamSegmentId);
+        target.writeLong(this.timestamp);
         AttributeSerializer.serializeUpdates(this.attributeUpdates, target);
     }
 
@@ -74,12 +91,13 @@ public class UpdateAttributesOperation extends MetadataOperation implements Segm
     protected void deserializeContent(DataInputStream source) throws IOException, SerializationException {
         readVersion(source, CURRENT_VERSION);
         this.streamSegmentId = source.readLong();
+        this.timestamp = source.readLong();
         this.attributeUpdates = AttributeSerializer.deserializeUpdates(source);
     }
 
     @Override
     public String toString() {
-        return String.format("%s, SegmentId = %d, Attributes = %d", super.toString(), this.streamSegmentId, this.attributeUpdates.size());
+        return String.format("%s, SegmentId = %d, Timestamp = %d, Attributes = %d", super.toString(), this.streamSegmentId, this.timestamp, this.attributeUpdates.size());
     }
 
     //endregion

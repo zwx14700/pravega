@@ -16,6 +16,7 @@ import io.pravega.segmentstore.server.UpdateableContainerMetadata;
 import io.pravega.segmentstore.storage.DurableDataLogFactory;
 import com.google.common.base.Preconditions;
 
+import java.time.Clock;
 import java.util.concurrent.ScheduledExecutorService;
 
 /**
@@ -25,6 +26,7 @@ public class DurableLogFactory implements OperationLogFactory {
     private final DurableDataLogFactory dataLogFactory;
     private final ScheduledExecutorService executor;
     private final DurableLogConfig config;
+    private final Clock clock;
 
     /**
      * Creates a new instance of the DurableLogFactory class.
@@ -32,18 +34,20 @@ public class DurableLogFactory implements OperationLogFactory {
      * @param config         The DurableLogConfig to use.
      * @param dataLogFactory The DurableDataLogFactory to use.
      * @param executor       The Executor to use.
+     * @param clock          The clock to use.
      */
-    public DurableLogFactory(DurableLogConfig config, DurableDataLogFactory dataLogFactory, ScheduledExecutorService executor) {
+    public DurableLogFactory(DurableLogConfig config, DurableDataLogFactory dataLogFactory, ScheduledExecutorService executor, Clock clock) {
         Preconditions.checkNotNull(config, "config");
         Preconditions.checkNotNull(dataLogFactory, "dataLogFactory");
         Preconditions.checkNotNull(executor, "executor");
         this.dataLogFactory = dataLogFactory;
         this.executor = executor;
         this.config = config;
+        this.clock = clock;
     }
 
     @Override
     public OperationLog createDurableLog(UpdateableContainerMetadata containerMetadata, ReadIndex readIndex) {
-        return new DurableLog(config, containerMetadata, this.dataLogFactory, readIndex, this.executor);
+        return new DurableLog(config, containerMetadata, this.dataLogFactory, readIndex, this.executor, clock);
     }
 }

@@ -9,6 +9,7 @@
  */
 package io.pravega.segmentstore.server.reading;
 
+import com.google.common.collect.Lists;
 import io.pravega.test.common.AssertExtensions;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -63,6 +64,33 @@ public class FutureReadResultEntryCollectionTests {
     }
 
     /**
+     * Tests the ability to poll entries for watermark updates.
+     */
+    @Test
+    public void testPollForWatermarkUpdate() {
+        @Cleanup
+        FutureReadResultEntryCollection c = new FutureReadResultEntryCollection();
+        List<FutureReadResultEntry> entries = generateEntries();
+        entries.forEach(c::add);
+
+        Collection<FutureReadResultEntry> actualResult;
+        for (FutureReadResultEntry entry : Lists.reverse(entries)) {
+            actualResult = c.poll(entry.getStreamSegmentOffset(), entry.getWatermark());
+            Assert.assertEquals(String.format("poll(%d,%d) unexpectedly removed entries from the collection.", entry.getStreamSegmentOffset(), entry.getWatermark()), 0, actualResult.size());
+
+            actualResult = c.poll(0, Long.MIN_VALUE);
+            Assert.assertEquals(String.format("poll(%d,%d) unexpectedly removed entries from the collection.", 0, Long.MIN_VALUE), 0, actualResult.size());
+
+            actualResult = c.poll(entry.getStreamSegmentOffset(), Long.MAX_VALUE);
+            Assert.assertEquals(String.format("poll(%d,%d) did not remove entries from the collection.", entry.getStreamSegmentOffset(), Long.MAX_VALUE), 1, actualResult.size());
+        }
+
+        entries.forEach(c::add);
+        actualResult = c.poll(0, Long.MAX_VALUE);
+        Assert.assertEquals(String.format("poll(%d,%d) did not remove entries from the collection.", 0, Long.MAX_VALUE), entries.size(), actualResult.size());
+    }
+
+    /**
      * Tests the ability for all the pending reads to be canceled.
      */
     @Test
@@ -96,7 +124,7 @@ public class FutureReadResultEntryCollectionTests {
     private List<FutureReadResultEntry> generateEntries() {
         ArrayList<FutureReadResultEntry> entries = new ArrayList<>();
         for (int i = 0; i < ENTRY_COUNT; i++) {
-            FutureReadResultEntry e = new FutureReadResultEntry(i * OFFSET_MULTIPLIER, OFFSET_MULTIPLIER / 2);
+            FutureReadResultEntry e = new FutureReadResultEntry(i * OFFSET_MULTIPLIER, OFFSET_MULTIPLIER / 2, i);
             entries.add(e);
         }
 

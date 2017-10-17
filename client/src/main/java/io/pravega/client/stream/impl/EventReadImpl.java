@@ -23,9 +23,15 @@ public class EventReadImpl<T> implements EventRead<T> {
     private final Position position;
     private final EventPointer eventPointer;
     private final String checkpointName;
-    
+    private final Long watermark;
+
     @Override
     public boolean isCheckpoint() {
         return checkpointName != null;
+    }
+
+    @Override
+    public boolean isWatermark() {
+        return watermark != null;
     }
 }

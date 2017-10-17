@@ -23,6 +23,7 @@ import io.pravega.client.stream.ReaderConfig;
 import io.pravega.client.stream.ReinitializationRequiredException;
 import io.pravega.client.stream.Sequence;
 import io.pravega.client.stream.Serializer;
+import io.pravega.client.stream.TimeDomain;
 import io.pravega.common.Exceptions;
 import io.pravega.common.Timer;
 import io.pravega.shared.protocol.netty.WireCommands;
@@ -37,6 +38,7 @@ import java.util.stream.Collectors;
 import javax.annotation.concurrent.GuardedBy;
 import lombok.Synchronized;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.tuple.Pair;
 
 
 @Slf4j
@@ -55,6 +57,8 @@ public class EventStreamReaderImpl<Type> implements EventStreamReader<Type> {
     private Sequence lastRead;
     @GuardedBy("readers")
     private boolean atCheckpoint;
+    @GuardedBy("readers")
+    private long lastWatermark = Long.MIN_VALUE;
     private final ReaderGroupStateManager groupState;
     private final Supplier<Long> clock;
 
@@ -79,9 +83,14 @@ public class EventStreamReaderImpl<Type> implements EventStreamReader<Type> {
             long offset = -1;
             ByteBuffer buffer;
             do { 
-                String checkpoint = updateGroupStateIfNeeded();
-                if (checkpoint != null) {
-                     return createEmptyEvent(checkpoint);
+                Pair<String, Long> updates = updateGroupStateIfNeeded();
+                if (updates != null && updates.getLeft() != null) {
+                     return createCheckpointEvent(updates.getLeft());
+                }
+                if (updates != null && updates.getRight() != null) {
+                    if (config.getTimeDomain() == TimeDomain.IngestionTime) {
+                        return createWatermarkEvent(updates.getRight());
+                    }
                 }
                 SegmentInputStream segmentReader = orderer.nextSegment(readers);
                 if (segmentReader == null) {
@@ -100,7 +109,7 @@ public class EventStreamReaderImpl<Type> implements EventStreamReader<Type> {
             } while (buffer == null && timer.getElapsedMillis() < timeout);
             
             if (buffer == null) {
-               return createEmptyEvent(null);
+               return createEmptyEvent();
             } 
             lastRead = Sequence.create(segment.getSegmentNumber(), offset);
             int length = buffer.remaining() + WireCommands.TYPE_PLUS_LENGTH_SIZE;
@@ -108,12 +117,21 @@ public class EventStreamReaderImpl<Type> implements EventStreamReader<Type> {
                     deserializer.deserialize(buffer),
                     getPosition(),
                     new EventPointerImpl(segment, offset, length),
+                    null,
                     null);
         }
     }
-    
-    private EventRead<Type> createEmptyEvent(String checkpoint) {
-        return new EventReadImpl<>(lastRead, null, getPosition(), null, checkpoint);
+
+    private EventRead<Type> createEmptyEvent() {
+        return new EventReadImpl<>(lastRead, null, getPosition(), null, null, null);
+    }
+
+    private EventRead<Type> createCheckpointEvent(String checkpoint) {
+        return new EventReadImpl<>(lastRead, null, getPosition(), null, checkpoint, null);
+    }
+
+    private EventRead<Type> createWatermarkEvent(long watermark) {
+        return new EventReadImpl<>(lastRead, null, getPosition(), null, null, watermark);
     }
 
     private PositionInternal getPosition() {
@@ -121,7 +139,12 @@ public class EventStreamReaderImpl<Type> implements EventStreamReader<Type> {
                 .collect(Collectors.toMap(e -> e.getSegmentId(), e -> e.getOffset()));
         return new PositionImpl(positions);
     }
-    
+
+    private Map<Segment, Long> getReaderWatermarks() {
+        return readers.stream()
+                .collect(Collectors.toMap(e -> e.getSegmentId(), e -> e.getWatermark()));
+    }
+
     /**
      * Releases or acquires segments as needed. Returns the name of the checkpoint if the reader is
      * at one.
@@ -134,7 +157,7 @@ public class EventStreamReaderImpl<Type> implements EventStreamReader<Type> {
      * have been persisted.
      */
     @GuardedBy("readers")
-    private String updateGroupStateIfNeeded() throws ReinitializationRequiredException {
+    private Pair<String,Long> updateGroupStateIfNeeded() throws ReinitializationRequiredException {
         try {
             String checkpoint = groupState.getCheckpoint();
             if (checkpoint == null) {
@@ -143,13 +166,20 @@ public class EventStreamReaderImpl<Type> implements EventStreamReader<Type> {
                     atCheckpoint = false;
                 }
                 acquireSegmentsIfNeeded();
-                return null;
             } else {
                 log.info("{} at checkpoint {}", this, checkpoint);
-                groupState.checkpoint(checkpoint, getPosition());
+                groupState.checkpoint(checkpoint, getPosition(), getReaderWatermarks());
                 atCheckpoint = true;
-                return checkpoint;
+                return Pair.of(checkpoint, null);
             }
+
+            long watermark = groupState.getWatermark();
+            if (lastWatermark < watermark) {
+                lastWatermark = watermark;
+                return Pair.of(null, watermark);
+            }
+
+            return null;
         } catch (ReinitializationRequiredException e) {
             close();
             throw e;

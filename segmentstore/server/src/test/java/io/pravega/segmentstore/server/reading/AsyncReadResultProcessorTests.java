@@ -67,7 +67,7 @@ public class AsyncReadResultProcessorTests extends ThreadPooledTestSuite {
                 return null;
             }
 
-            return new CacheReadResultEntry(offset, entries.get(idx), 0, entries.get(idx).length);
+            return new CacheReadResultEntry(offset, entries.get(idx), 0, entries.get(idx).length, 42L);
         };
 
         // Start an AsyncReadResultProcessor.
@@ -105,7 +105,7 @@ public class AsyncReadResultProcessorTests extends ThreadPooledTestSuite {
                 return null;
             }
 
-            Supplier<ReadResultEntryContents> entryContentsSupplier = () -> new ReadResultEntryContents(new ByteArrayInputStream(entries.get(idx)), entries.get(idx).length);
+            Supplier<ReadResultEntryContents> entryContentsSupplier = () -> new ReadResultEntryContents(new ByteArrayInputStream(entries.get(idx)), entries.get(idx).length, 42L);
             return new TestFutureReadResultEntry(offset, length, entryContentsSupplier, executorService());
         };
 
@@ -239,7 +239,7 @@ public class AsyncReadResultProcessorTests extends ThreadPooledTestSuite {
         private final Executor executor;
 
         TestFutureReadResultEntry(long streamSegmentOffset, int requestedReadLength, Supplier<ReadResultEntryContents> resultSupplier, Executor executor) {
-            super(streamSegmentOffset, requestedReadLength);
+            super(streamSegmentOffset, requestedReadLength, 42L);
             this.resultSupplier = resultSupplier;
             this.executor = executor;
         }

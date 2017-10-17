@@ -380,6 +380,11 @@ public class StreamSegmentContainerRegistryTests extends ThreadPooledTestSuite {
             return null;
         }
 
+        @Override
+        public void advanceWatermarks() {
+
+        }
+
         //endregion
     }
 

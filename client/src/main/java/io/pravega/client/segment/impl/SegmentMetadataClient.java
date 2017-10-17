@@ -22,6 +22,12 @@ public interface SegmentMetadataClient extends AutoCloseable {
     abstract long fetchCurrentStreamLength();
 
     /**
+     * Returns the creation time of the current segment.
+     * @return The time since the UNIX epoch in milliseconds.
+     */
+    abstract long fetchCreationTime();
+
+    /**
      * Gets the current value of the provided attribute.
      * @param attribute The attribute to get the value of.
      * @return The value of the attribute or {@link SegmentAttribute#NULL_VALUE} if it is not set.

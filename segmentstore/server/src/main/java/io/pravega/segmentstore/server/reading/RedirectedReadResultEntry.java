@@ -21,6 +21,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -39,6 +40,7 @@ class RedirectedReadResultEntry implements CompletableReadResultEntry {
     private CompletableReadResultEntry secondEntry;
     private final CompletableFuture<ReadResultEntryContents> result;
     private final GetEntry retryGetEntry;
+    private final GetWatermark getWatermark;
     private final ScheduledExecutorService executorService;
 
     //endregion
@@ -52,19 +54,22 @@ class RedirectedReadResultEntry implements CompletableReadResultEntry {
      * @param offsetAdjustment The amount to adjust the offset by. This value, added to the entry's SegmentOffset, should
      *                         equal the offset in the Parent Segment where the read is thought to be at.
      * @param retryGetEntry    A BiFunction to invoke when needing to retry an entry. First argument: offset, Second: length.
+     * @param getWatermark     A Function to invoke when needing the watermark for the content at a given offset. First argument: offset.
      * @param executorService  An executor service to execute background operations on.
      */
-    RedirectedReadResultEntry(CompletableReadResultEntry entry, long offsetAdjustment, GetEntry retryGetEntry, ScheduledExecutorService executorService) {
+    RedirectedReadResultEntry(CompletableReadResultEntry entry, long offsetAdjustment, GetEntry retryGetEntry, GetWatermark getWatermark, ScheduledExecutorService executorService) {
         Preconditions.checkNotNull(entry, "entry");
         Preconditions.checkNotNull(retryGetEntry, "retryGetEntry");
+        Preconditions.checkNotNull(getWatermark, "getWatermark");
         Preconditions.checkNotNull(executorService, "executorService");
         this.firstEntry = entry;
         this.adjustedOffset = entry.getStreamSegmentOffset() + offsetAdjustment;
         Preconditions.checkArgument(this.adjustedOffset >= 0, "Given offset adjustment would result in a negative offset.");
         this.retryGetEntry = retryGetEntry;
+        this.getWatermark = getWatermark;
         this.executorService = executorService;
         if (FutureHelpers.isSuccessful(entry.getContent())) {
-            this.result = entry.getContent();
+            this.result = entry.getContent().thenApply(this::adjustContents);
         } else {
             this.result = new CompletableFuture<>();
             linkFirstEntryToResult();
@@ -73,6 +78,7 @@ class RedirectedReadResultEntry implements CompletableReadResultEntry {
 
     private void linkFirstEntryToResult() {
         this.firstEntry.getContent()
+                       .thenApply(this::adjustContents)
                        .thenAccept(this.result::complete)
                        .exceptionally(ex -> {
                            FutureHelpers.delayedFuture(getExceptionDelay(ex), this.executorService)
@@ -130,6 +136,12 @@ class RedirectedReadResultEntry implements CompletableReadResultEntry {
     //endregion
 
     //region Helpers
+
+    private ReadResultEntryContents adjustContents(ReadResultEntryContents contents) {
+        // the Parent Segment provides the authoritative watermark for the firstEntry contents.
+        long adjustedWatermark = this.getWatermark.apply(getStreamSegmentOffset() + contents.getLength() - 1);
+        return new ReadResultEntryContents(contents.getData(), contents.getLength(), adjustedWatermark);
+    }
 
     protected Duration getExceptionDelay(Throwable ex) {
         boolean requiresDelay = this.secondEntry == null && ExceptionHelpers.getRealException(ex) instanceof StreamSegmentNotExistsException;
@@ -224,5 +236,9 @@ class RedirectedReadResultEntry implements CompletableReadResultEntry {
 
     @FunctionalInterface
     public interface GetEntry extends BiFunction<Long, Integer, CompletableReadResultEntry> {
+    }
+
+    @FunctionalInterface
+    public interface GetWatermark extends Function<Long, Long> {
     }
 }

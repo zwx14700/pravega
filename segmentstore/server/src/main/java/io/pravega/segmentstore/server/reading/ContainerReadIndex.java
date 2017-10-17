@@ -156,6 +156,16 @@ public class ContainerReadIndex implements ReadIndex {
     }
 
     @Override
+    public void updateMetadata(long streamSegmentId) {
+        Exceptions.checkNotClosed(this.closed.get(), this);
+        log.debug("{}: updateMetadata (StreamSegmentId = {}).", this.traceObjectId, streamSegmentId);
+
+        StreamSegmentReadIndex index = getOrCreateIndex(streamSegmentId);
+        Exceptions.checkArgument(!index.isMerged(), "streamSegmentId", "StreamSegment is merged. Cannot access it anymore.");
+        index.updateMetadata();
+    }
+
+    @Override
     public ReadResult read(long streamSegmentId, long offset, int maxLength, Duration timeout) {
         Exceptions.checkNotClosed(this.closed.get(), this);
         log.debug("{}: read (StreamSegmentId = {}, Offset = {}, MaxLength = {}).", this.traceObjectId, streamSegmentId, offset, maxLength);
