@@ -61,6 +61,12 @@ import io.pravega.controller.stream.api.grpc.v1.Controller.UpdateStreamStatus;
 import io.pravega.controller.stream.api.grpc.v1.ControllerServiceGrpc;
 import io.pravega.shared.protocol.netty.PravegaNodeUri;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.security.KeyStore;
+import java.security.KeyStoreException;
+import java.security.NoSuchAlgorithmException;
+import java.security.cert.CertificateException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -79,8 +85,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import javax.net.ssl.SSLException;
+import javax.net.ssl.TrustManagerFactory;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
+import org.apache.commons.io.FileUtils;
 
 import static io.pravega.common.concurrent.Futures.getAndHandleExceptions;
 
@@ -146,7 +154,24 @@ public class ControllerImpl implements Controller {
             String trustStore = config.getClientConfig().getPravegaTrustStore();
             sslContextBuilder = GrpcSslContexts.forClient();
             if (!Strings.isNullOrEmpty(trustStore)) {
-                sslContextBuilder = sslContextBuilder.trustManager(new File(trustStore));
+                try {
+                TrustManagerFactory tmf;
+                char[] trustStorePassword = null;
+                if (!Strings.isNullOrEmpty(config.getClientConfig().getPravegaTrustStorePasswordPath())) {
+                        trustStorePassword = getPasswordFromFile(config.getClientConfig().getPravegaTrustStorePasswordPath()).trim().toCharArray();
+                }
+
+                KeyStore ks = KeyStore.getInstance("JKS");
+
+                try (FileInputStream ksin = new FileInputStream(config.getClientConfig().getPravegaTrustStore())) {
+                    ks.load(ksin, trustStorePassword);
+                }
+                tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+                tmf.init(ks);
+                sslContextBuilder = sslContextBuilder.trustManager(tmf);
+                } catch (IOException | CertificateException | NoSuchAlgorithmException | KeyStoreException e) {
+                    log.warn("Error setting up trust store. Going ahead with default trust store", e);
+                }
             }
             try {
                 channelBuilder = ((NettyChannelBuilder) channelBuilder).sslContext(sslContextBuilder.build())
@@ -166,6 +191,19 @@ public class ControllerImpl implements Controller {
             client = client.withCallCredentials(MoreCallCredentials.from(wrapper));
         }
         this.client = client;
+    }
+
+    private String getPasswordFromFile(String tlsKeyPasswordFile) throws IOException {
+        byte[] pwd;
+
+        if (Strings.isNullOrEmpty(tlsKeyPasswordFile)) {
+            return "";
+        }
+        File passwdFile = new File(tlsKeyPasswordFile);
+        if (passwdFile.length() == 0) {
+            return "";
+        }
+        return new String(FileUtils.readFileToByteArray(passwdFile)).trim();
     }
 
     @Override

@@ -48,11 +48,11 @@ echo "
 tlsProvider=OpenSSL
 # key store
 tlsKeyStoreType=JKS
-tlsKeyStore=/var/private/tls/bookie.keystore.jks
-tlsKeyStorePasswordPath=/var/private/tls/bookie.keystore.passwd
+tlsKeyStore=/var/private/tls/keystore.jks
+tlsKeyStorePasswordPath=/var/private/tls/keystore.passwd
 # trust store
 tlsTrustStoreType=JKS
-tlsTrustStore=/var/private/tls/bookie.truststore.jks
+tlsTrustStore=/var/private/tls/truststore.jks
 tlsTrustStorePasswordPath=/var/private/tls/bookie.truststore.passwd" >> ${BK_HOME}/conf/bk_server.conf
 
 echo "wait for zookeeper"

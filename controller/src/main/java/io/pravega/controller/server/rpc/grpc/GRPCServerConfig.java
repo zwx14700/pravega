@@ -70,8 +70,12 @@ public interface GRPCServerConfig {
      *
      * @return A file which contains the TLS certificate.
      */
-    String getTlsCertFile();
+    String getTlsKeyStoreFile();
 
+    /**
+     * Password file to store the password for the JKS keystore.
+     */
+    String getTlsKeyPasswordFile();
 
     /**
      * File containing the private key for the X.509 certificate used for TLS.

@@ -80,7 +80,8 @@ public abstract class ControllerServiceStarterTest {
         final String testScope = "testScope";
         StreamManager streamManager = new StreamManagerImpl(PravegaClientConfig.builder().controllerURI(uri)
                 .credentials(new PravegaDefaultCredentials("1111_aaaa", "admin"))
-                .pravegaTrustStore("../config/cert.pem").build());
+                .pravegaTrustStore("../config/client.truststore.jks")
+                .build());
 
         streamManager.createScope(testScope);
         streamManager.deleteScope(testScope);
@@ -119,8 +120,10 @@ public abstract class ControllerServiceStarterTest {
                 .grpcServerConfig(Optional.of(GRPCServerConfigImpl.builder()
                                                                   .port(grpcPort)
                                                                   .authorizationEnabled(enableAuth)
+                                                                  .userPasswordFile("../config/passwd")
                                                                   .tlsEnabled(enableAuth)
-                                                                  .tlsCertFile("../config/cert.pem")
+                                                                  .tlsKeyStoreFile("../config/keystore.jks")
+                                                                  .tlsKeyPasswordFile("../config/keystore.jks.passwd")
                                                                   .tlsKeyFile("../config/key.pem")
                                                                   .build()))
                 .restServerConfig(Optional.empty())

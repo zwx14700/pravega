@@ -48,6 +48,11 @@ public class PravegaClientConfig {
      */
     private boolean validateHostName;
 
+    /**
+     * Password path for the trust manager if applicable.
+     */
+    private String pravegaTrustStorePasswordPath;
+
     public boolean isEnableTls() {
         return this.controllerURI.getScheme().equals("tls") || this.controllerURI.getScheme().equals("ssl")
                 || this.controllerURI.getScheme().equals("pravegas");

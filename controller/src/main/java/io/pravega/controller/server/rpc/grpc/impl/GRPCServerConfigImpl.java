@@ -27,15 +27,17 @@ public class GRPCServerConfigImpl implements GRPCServerConfig {
     private final boolean authorizationEnabled;
     private final String userPasswordFile;
     private final boolean tlsEnabled;
-    private final String tlsCertFile;
+    private final String tlsKeyStoreFile;
     private final String tlsKeyFile;
     private final String tokenSigningKey;
     private final String tlsTrustStore;
+    private final String tlsKeyPasswordFile;
 
     @Builder
     public GRPCServerConfigImpl(final int port, final String publishedRPCHost, final Integer publishedRPCPort,
                                 boolean authorizationEnabled, String userPasswordFile, boolean tlsEnabled,
-                                String tlsCertFile, String tlsKeyFile, String tokenSigningKey, String tlsTrustStore) {
+                                String tlsKeyStoreFile, String tlsKeyFile, String tokenSigningKey, String tlsTrustStore,
+                                String tlsKeyPasswordFile) {
 
         Preconditions.checkArgument(port > 0, "Invalid port.");
         if (publishedRPCHost != null) {
@@ -51,9 +53,15 @@ public class GRPCServerConfigImpl implements GRPCServerConfig {
         this.authorizationEnabled = authorizationEnabled;
         this.userPasswordFile = userPasswordFile;
         this.tlsEnabled = tlsEnabled;
-        this.tlsCertFile = tlsCertFile;
+        this.tlsKeyStoreFile = tlsKeyStoreFile;
         this.tlsKeyFile = tlsKeyFile;
         this.tlsTrustStore = tlsTrustStore;
         this.tokenSigningKey = tokenSigningKey;
+        this.tlsKeyPasswordFile = tlsKeyPasswordFile;
+    }
+
+    @Override
+    public String getTlsKeyPasswordFile() {
+        return tlsKeyPasswordFile;
     }
 }

@@ -56,7 +56,8 @@ public final class Config {
     private static final String USER_PASSWORD_FILE = CONFIG.getString("config.controller.server.userPasswordFile");
     private static final boolean TLS_ENABLED = CONFIG.getBoolean("config.controller.server.tlsEnabled");
     private static final String TLS_KEY_FILE = CONFIG.getString("config.controller.server.tlsKeyFile");
-    private static final String TLS_CERT_FILE = CONFIG.getString("config.controller.server.tlsCertFile");
+    private static final String TLS_KEYSTORE_FILE = CONFIG.getString("config.controller.server.tlsKeyStoreFile");
+    private static final String TLS_KEYSTORE_PASSWORD_FILE = CONFIG.getString("config.controller.server.tlsKeyStorePasswordFile");
     private static final String TLS_TRUST_STORE = CONFIG.getString("config.controller.server.tlsTrustStore");
     private static final String TOKEN_SIGNING_KEY = CONFIG.getString("config.controller.server.tokenSigningKey");
 
@@ -110,10 +111,10 @@ public final class Config {
                 .authorizationEnabled(Config.AUTHORIZATION_ENABLED)
                 .userPasswordFile(Config.USER_PASSWORD_FILE)
                 .tlsEnabled(Config.TLS_ENABLED)
-                .tlsCertFile(Config.TLS_CERT_FILE)
+                .tlsKeyStoreFile(Config.TLS_KEYSTORE_FILE)
+                .tlsKeyPasswordFile(Config.TLS_KEYSTORE_PASSWORD_FILE)
                 .tlsTrustStore(Config.TLS_TRUST_STORE)
-                .tlsKeyFile(Config.TLS_KEY_FILE)
-                                   .tokenSigningKey(Config.TOKEN_SIGNING_KEY)
+                .tokenSigningKey(Config.TOKEN_SIGNING_KEY)
                 .build();
     }
 

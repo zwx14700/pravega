@@ -10,16 +10,29 @@
 package io.pravega.controller.server.rpc.grpc;
 
 import com.google.common.base.Strings;
+import com.google.common.util.concurrent.AbstractIdleService;
+import io.grpc.Server;
+import io.grpc.ServerBuilder;
+import io.grpc.netty.GrpcSslContexts;
+import io.grpc.netty.NettyServerBuilder;
+import io.netty.handler.ssl.SslContextBuilder;
 import io.pravega.common.LoggerHelpers;
 import io.pravega.controller.server.ControllerService;
 import io.pravega.controller.server.rpc.auth.PravegaAuthManager;
 import io.pravega.controller.server.rpc.grpc.v1.ControllerServiceImpl;
-import com.google.common.util.concurrent.AbstractIdleService;
-import io.grpc.Server;
-import io.grpc.ServerBuilder;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.security.KeyStore;
+import java.security.KeyStoreException;
+import java.security.NoSuchAlgorithmException;
+import java.security.UnrecoverableKeyException;
+import java.security.cert.CertificateException;
+import javax.net.ssl.KeyManagerFactory;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.io.FileUtils;
 
 /**
  * gRPC based RPC Server for the Controller.
@@ -52,11 +65,35 @@ public class GRPCServer extends AbstractIdleService {
             this.pravegaAuthManager = null;
         }
 
-        if (serverConfig.isTlsEnabled() && !Strings.isNullOrEmpty(serverConfig.getTlsCertFile())) {
-            builder = builder.useTransportSecurity(new File(serverConfig.getTlsCertFile()),
-                    new File(serverConfig.getTlsKeyFile()));
+        if (serverConfig.isTlsEnabled() && !Strings.isNullOrEmpty(serverConfig.getTlsKeyStoreFile())) {
+            KeyStore keyStore;
+            try (final InputStream is = new FileInputStream(serverConfig.getTlsKeyStoreFile())) {
+                keyStore = KeyStore.getInstance("JKS");
+                String password = getPasswordFromFile(serverConfig.getTlsKeyPasswordFile());
+                keyStore.load(is, password.toCharArray());
+                final KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory
+                        .getDefaultAlgorithm());
+                kmf.init(keyStore, password.toCharArray());
+                builder = ((NettyServerBuilder) builder).sslContext(GrpcSslContexts.configure(SslContextBuilder.forServer(kmf)).build());
+            } catch (IOException | CertificateException | UnrecoverableKeyException
+                    | NoSuchAlgorithmException | KeyStoreException e) {
+                log.warn("Error setting up SSL for server. Falling back to non SSL connection", e);
+            }
         }
         this.server = builder.build();
+    }
+
+    private String getPasswordFromFile(String tlsKeyPasswordFile) throws IOException {
+        byte[] pwd;
+
+        if (Strings.isNullOrEmpty(tlsKeyPasswordFile)) {
+            return "";
+        }
+        File passwdFile = new File(tlsKeyPasswordFile);
+        if (passwdFile.length() == 0) {
+            return "";
+        }
+        return new String(FileUtils.readFileToByteArray(passwdFile)).trim();
     }
 
     /**

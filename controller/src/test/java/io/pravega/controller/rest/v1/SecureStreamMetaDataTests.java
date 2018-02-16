@@ -25,7 +25,8 @@ public class SecureStreamMetaDataTests extends  StreamMetaDataTests {
     public void setup() {
         this.authManager = new PravegaAuthManager(GRPCServerConfigImpl.builder()
                                                                       .authorizationEnabled(true)
-                                                                      .tlsCertFile("../config/cert.pem")
+                                                                      .tlsKeyStoreFile("../config/keystore.jks")
+                                                                      .tlsKeyPasswordFile("../config/keystore.jks.passwd")
                                                                       .tlsKeyFile("../config/key.pem")
                                                                       .userPasswordFile("../config/passwd")
                                                                       .port(1000)
