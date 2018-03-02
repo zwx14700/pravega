@@ -103,6 +103,11 @@ configure_segmentstore() {
     add_system_property "pravegaservice.zkURL" "${ZK_URL}"
     add_system_property "autoScale.controllerUri" "${CONTROLLER_URL}"
     add_system_property "bookkeeper.zkAddress" "${BK_ZK_URL:-${ZK_URL}}"
+    # temporarily hardcoded - needs to come from configset or environment variable
+    add_system_property "metrics.enableStatistics" "true"
+    add_system_property "metrics.enableStatsdReporter" "true"
+    add_system_property "metrics.statsDHost" "hosts-telegraf-s.tick"
+    add_system_property "metrics.statsDPort" "8125"
     echo "JAVA_OPTS=${JAVA_OPTS}"
 }
 
