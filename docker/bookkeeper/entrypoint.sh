@@ -44,6 +44,9 @@ sed -i 's|# zkLedgersRootPath=/ledgers|zkLedgersRootPath='${BK_LEDGERS_PATH}'|' 
 sed -i '/autoRecoveryDaemonEnabled/d' ${BK_HOME}/conf/bk_server.conf
 echo autoRecoveryDaemonEnabled=${BK_AUTORECOVERY} >> ${BK_HOME}/conf/bk_server.conf
 
+echo enableStatistics=true >> ${BK_HOME}/conf/bk_server.conf
+echo statsProviderClass=org.apache.bookkeeper.stats.prometheus.PrometheusMetricsProvider >> ${BK_HOME}/conf/bk_server.conf
+
 echo "wait for zookeeper"
 until ${ZK_HOME}/bin/zkCli.sh -server $ZK_URL ls /; do sleep 2; done
 
