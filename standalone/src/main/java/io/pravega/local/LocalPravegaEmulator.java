@@ -36,7 +36,7 @@ public class LocalPravegaEmulator implements AutoCloseable {
                 .containerCount(4)
                 .startRestServer(true)
                 .restServerPort(restServerPort)
-                .enableMetrics(false)
+                .enableMetrics(true)
                 .build();
         inProcPravegaCluster.setControllerPorts(new int[] {controllerPort});
         inProcPravegaCluster.setSegmentStorePorts(new int[] {segmentStorePort});

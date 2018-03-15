@@ -41,6 +41,8 @@ class StatsProviderImpl implements StatsProvider {
     private final List<ScheduledReporter> reporters = new ArrayList<ScheduledReporter>();
     private final MetricsConfig conf;
 
+    private boolean started;
+
     StatsProviderImpl(MetricsConfig conf) {
         this.conf = Preconditions.checkNotNull(conf, "conf");
     }
@@ -63,7 +65,14 @@ class StatsProviderImpl implements StatsProvider {
     @Synchronized
     @Override
     public void start() {
+        if(started) {
+            log.info("StatsProvider already started");
+            return;
+        }
+        started = true;
+
         init();
+        log.info("Starting StatsProvider");
 
         if (conf.isEnableCSVReporter()) {
             // NOTE:  metrics output files are exclusive to a given process
@@ -125,6 +134,7 @@ class StatsProviderImpl implements StatsProvider {
                 .build());
         }
         for (ScheduledReporter r : reporters) {
+            log.info("Starting StatsProvider reporter: {}", r);
             r.start(conf.getStatsOutputFrequencySeconds(), TimeUnit.SECONDS);
         }
     }
