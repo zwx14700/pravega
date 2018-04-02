@@ -20,8 +20,6 @@ import com.spotify.docker.client.messages.HostConfig;
 import com.spotify.docker.client.messages.PortBinding;
 import io.pravega.common.Exceptions;
 import io.pravega.common.concurrent.Futures;
-import lombok.extern.slf4j.Slf4j;
-import org.junit.Assert;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -34,6 +32,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import lombok.extern.slf4j.Slf4j;
+import org.junit.Assert;
+
 import static io.pravega.test.system.framework.Utils.DOCKER_NETWORK;
 import static io.pravega.test.system.framework.Utils.getConfig;
 import static org.junit.Assert.assertFalse;
@@ -50,6 +51,7 @@ public class DockerBasedTestExecutor implements TestExecutor {
     private final String expectedDockerApiVersion = "1.22";
     private final ScheduledExecutorService executorService = Executors.newScheduledThreadPool(3);
 
+    @Override
     public CompletableFuture<Void> startTestExecution(Method testMethod) {
 
         try {
@@ -94,6 +96,7 @@ public class DockerBasedTestExecutor implements TestExecutor {
                 });
     }
 
+    @Override
     public void stopTestExecution() {
         try {
             Exceptions.handleInterrupted(() -> client.stopContainer(id.get(), 0));

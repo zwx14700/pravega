@@ -11,12 +11,6 @@ package io.pravega.test.system;
 
 import io.pravega.client.ClientFactory;
 import io.pravega.client.admin.ReaderGroupManager;
-import io.pravega.common.concurrent.Futures;
-import io.pravega.common.util.Retry;
-import io.pravega.test.system.framework.Environment;
-import io.pravega.test.system.framework.SystemTestRunner;
-import io.pravega.test.system.framework.Utils;
-import io.pravega.test.system.framework.services.Service;
 import io.pravega.client.stream.EventStreamReader;
 import io.pravega.client.stream.EventStreamWriter;
 import io.pravega.client.stream.EventWriterConfig;
@@ -24,15 +18,21 @@ import io.pravega.client.stream.ReaderConfig;
 import io.pravega.client.stream.ReaderGroupConfig;
 import io.pravega.client.stream.ReinitializationRequiredException;
 import io.pravega.client.stream.ScalingPolicy;
+import io.pravega.client.stream.Stream;
 import io.pravega.client.stream.StreamConfiguration;
 import io.pravega.client.stream.Transaction;
-import io.pravega.client.stream.impl.ControllerImpl;
 import io.pravega.client.stream.impl.Controller;
+import io.pravega.client.stream.impl.ControllerImpl;
 import io.pravega.client.stream.impl.JavaSerializer;
+import io.pravega.common.concurrent.Futures;
+import io.pravega.common.util.Retry;
+import io.pravega.test.system.framework.Environment;
+import io.pravega.test.system.framework.SystemTestRunner;
+import io.pravega.test.system.framework.Utils;
+import io.pravega.test.system.framework.services.Service;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
 import java.util.Random;
 import java.util.TreeSet;
@@ -49,6 +49,7 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+
 import static java.time.Duration.ofSeconds;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.junit.Assert.assertEquals;
@@ -150,8 +151,7 @@ public class ReadWithAutoScaleTest extends AbstractScaleTests {
         log.info("Creating Reader group : {}", READER_GROUP_NAME);
         @Cleanup
         ReaderGroupManager readerGroupManager = ReaderGroupManager.withScope(SCOPE, controllerUri);
-        readerGroupManager.createReaderGroup(READER_GROUP_NAME, ReaderGroupConfig.builder().startingTime(0).build(),
-                Collections.singleton(STREAM_NAME));
+        readerGroupManager.createReaderGroup(READER_GROUP_NAME, ReaderGroupConfig.builder().stream(Stream.of(SCOPE, STREAM_NAME)).build());
 
         //2.2 Create readers.
         CompletableFuture<Void> reader1 = startReader("reader1", clientFactory, READER_GROUP_NAME,
