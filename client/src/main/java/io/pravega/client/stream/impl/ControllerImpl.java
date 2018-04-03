@@ -21,6 +21,7 @@ import io.grpc.netty.NegotiationType;
 import io.grpc.netty.NettyChannelBuilder;
 import io.grpc.stub.StreamObserver;
 import io.grpc.util.RoundRobinLoadBalancerFactory;
+import io.netty.handler.ssl.ClientAuth;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.pravega.client.segment.impl.Segment;
 import io.pravega.client.stream.InvalidStreamException;
@@ -168,7 +169,7 @@ public class ControllerImpl implements Controller {
                 }
                 tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
                 tmf.init(ks);
-                sslContextBuilder = sslContextBuilder.trustManager(tmf);
+                sslContextBuilder = sslContextBuilder.trustManager(tmf).clientAuth(ClientAuth.NONE);
                 } catch (IOException | CertificateException | NoSuchAlgorithmException | KeyStoreException e) {
                     log.warn("Error setting up trust store. Going ahead with default trust store", e);
                 }

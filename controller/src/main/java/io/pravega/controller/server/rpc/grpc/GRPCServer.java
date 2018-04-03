@@ -15,6 +15,7 @@ import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import io.grpc.netty.GrpcSslContexts;
 import io.grpc.netty.NettyServerBuilder;
+import io.netty.handler.ssl.ClientAuth;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.pravega.common.LoggerHelpers;
 import io.pravega.controller.server.ControllerService;
@@ -74,7 +75,8 @@ public class GRPCServer extends AbstractIdleService {
                 final KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory
                         .getDefaultAlgorithm());
                 kmf.init(keyStore, password.toCharArray());
-                builder = ((NettyServerBuilder) builder).sslContext(GrpcSslContexts.configure(SslContextBuilder.forServer(kmf)).build());
+                builder = ((NettyServerBuilder) builder).sslContext(GrpcSslContexts.configure(SslContextBuilder.forServer(kmf))
+                                                                                   .clientAuth(ClientAuth.NONE).build());
             } catch (IOException | CertificateException | UnrecoverableKeyException
                     | NoSuchAlgorithmException | KeyStoreException e) {
                 log.warn("Error setting up SSL for server. Falling back to non SSL connection", e);
