@@ -72,8 +72,7 @@ public class GRPCServer extends AbstractIdleService {
                 keyStore = KeyStore.getInstance("JKS");
                 String password = getPasswordFromFile(serverConfig.getTlsKeyPasswordFile());
                 keyStore.load(is, password.toCharArray());
-                final KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory
-                        .getDefaultAlgorithm());
+                final KeyManagerFactory kmf = KeyManagerFactory.getInstance("SunX509");
                 kmf.init(keyStore, password.toCharArray());
                 builder = ((NettyServerBuilder) builder).sslContext(GrpcSslContexts.configure(SslContextBuilder.forServer(kmf))
                                                                                    .clientAuth(ClientAuth.NONE).build());

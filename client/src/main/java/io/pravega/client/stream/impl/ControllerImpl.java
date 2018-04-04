@@ -167,7 +167,7 @@ public class ControllerImpl implements Controller {
                 try (FileInputStream ksin = new FileInputStream(config.getClientConfig().getPravegaTrustStore())) {
                     ks.load(ksin, trustStorePassword);
                 }
-                tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+                tmf = TrustManagerFactory.getInstance("SunX509");
                 tmf.init(ks);
                 sslContextBuilder = sslContextBuilder.trustManager(tmf).clientAuth(ClientAuth.NONE);
                 } catch (IOException | CertificateException | NoSuchAlgorithmException | KeyStoreException e) {
