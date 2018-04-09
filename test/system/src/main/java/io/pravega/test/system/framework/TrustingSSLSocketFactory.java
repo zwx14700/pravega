@@ -63,7 +63,7 @@ public final class TrustingSSLSocketFactory extends SSLSocketFactory
             try {
                 KeyStore
                         keyStore =
-                        loadKeyStore(TrustingSSLSocketFactory.class.getResourceAsStream("/keystore.jks"));
+                        loadKeyStore(TrustingSSLSocketFactory.class.getResourceAsStream("/bookie.keystore.jks"));
                 this.privateKey = (PrivateKey) keyStore.getKey(serverAlias, KEYSTORE_PASSWORD);
                 Certificate[] rawChain = keyStore.getCertificateChain(serverAlias);
                 this.certificateChain = Arrays.copyOf(rawChain, rawChain.length, X509Certificate[].class);

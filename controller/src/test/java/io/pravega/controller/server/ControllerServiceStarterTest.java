@@ -80,7 +80,7 @@ public abstract class ControllerServiceStarterTest {
         final String testScope = "testScope";
         StreamManager streamManager = new StreamManagerImpl(PravegaClientConfig.builder().controllerURI(uri)
                 .credentials(new PravegaDefaultCredentials("1111_aaaa", "admin"))
-                .pravegaTrustStore("../config/truststore.jks")
+                .pravegaTrustStore("../config/bookie.truststore.jks")
                 .build());
 
         streamManager.createScope(testScope);
@@ -122,8 +122,8 @@ public abstract class ControllerServiceStarterTest {
                                                                   .authorizationEnabled(enableAuth)
                                                                   .userPasswordFile("../config/passwd")
                                                                   .tlsEnabled(enableAuth)
-                                                                  .tlsKeyStoreFile("../config/keystore.jks")
-                                                                  .tlsKeyPasswordFile("../config/keystore.jks.passwd")
+                                                                  .tlsKeyStoreFile("../config/bookie.keystore.jks")
+                                                                  .tlsKeyPasswordFile("../config/bookie.keystore.jks.passwd")
                                                                   .tlsKeyFile("../config/key.pem")
                                                                   .build()))
                 .restServerConfig(Optional.empty())

@@ -216,11 +216,10 @@ public class BookKeeperServiceRunner implements AutoCloseable {
         conf.setJournalAdaptiveGroupWrites(false);
         conf.setZkLedgersRootPath(ledgersPath);
 
-        if ()
         conf.setTLSProvider("OpenSSL");
         conf.setTLSProviderFactoryClass("org.apache.bookkeeper.tls.TLSContextFactory");
-        conf.setTLSKeyStore("../../../config/keystore.jks");
-        conf.setTLSKeyStorePasswordPath("../../../config/keystore.jks.passwd");
+        conf.setTLSKeyStore("../../../config/bookie.keystore.jks");
+        conf.setTLSKeyStorePasswordPath("../../../config/bookie.keystore.jks.passwd");
 
         log.info("Starting Bookie at port " + bkPort);
         val bs = new BookieServer(conf);
