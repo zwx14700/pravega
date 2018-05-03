@@ -19,7 +19,6 @@ import io.pravega.common.concurrent.Futures;
 import io.pravega.common.concurrent.SequentialAsyncProcessor;
 import io.pravega.common.util.ArrayView;
 import io.pravega.common.util.CloseableIterator;
-import io.pravega.common.util.RetriesExhaustedException;
 import io.pravega.common.util.Retry;
 import io.pravega.segmentstore.storage.DataLogDisabledException;
 import io.pravega.segmentstore.storage.DataLogInitializationException;
@@ -36,7 +35,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -94,8 +92,6 @@ class BookKeeperLog implements DurableDataLog {
     private WriteLedger writeLedger;
     @GuardedBy("lock")
     private LogMetadata logMetadata;
-    private final WriteQueue writes;
-    private final SequentialAsyncProcessor writeProcessor;
     private final SequentialAsyncProcessor rolloverProcessor;
     private final BookKeeperMetrics.BookKeeperLog metrics;
     private final ScheduledFuture<?> metricReporter;
@@ -122,9 +118,7 @@ class BookKeeperLog implements DurableDataLog {
         this.closed = new AtomicBoolean();
         this.logNodePath = HierarchyUtils.getPath(containerId, this.config.getZkHierarchyDepth());
         this.traceObjectId = String.format("Log[%d]", containerId);
-        this.writes = new WriteQueue();
         val retry = createRetryPolicy(this.config.getMaxWriteAttempts(), this.config.getBkWriteTimeoutMillis());
-        this.writeProcessor = new SequentialAsyncProcessor(this::processWritesSync, retry, this::handleWriteProcessorFailures, this.executorService);
         this.rolloverProcessor = new SequentialAsyncProcessor(this::rollover, retry, this::handleRolloverFailure, this.executorService);
         this.metrics = new BookKeeperMetrics.BookKeeperLog(containerId);
         this.metricReporter = this.executorService.scheduleWithFixedDelay(this::reportMetrics, REPORT_INTERVAL, REPORT_INTERVAL, TimeUnit.MILLISECONDS);
@@ -158,7 +152,6 @@ class BookKeeperLog implements DurableDataLog {
             this.metricReporter.cancel(true);
             this.metrics.close();
             this.rolloverProcessor.close();
-            this.writeProcessor.close();
 
             // Close active ledger.
             WriteLedger writeLedger;
@@ -167,9 +160,6 @@ class BookKeeperLog implements DurableDataLog {
                 this.writeLedger = null;
                 this.logMetadata = null;
             }
-
-            // Close the write queue and cancel the pending writes.
-            this.writes.close().forEach(w -> w.fail(new CancellationException("BookKeeperLog has been closed."), true));
 
             if (writeLedger != null) {
                 try {
@@ -300,10 +290,8 @@ class BookKeeperLog implements DurableDataLog {
 
         // Queue up the write.
         CompletableFuture<LogAddress> result = new CompletableFuture<>();
-        this.writes.add(new Write(data, getWriteLedger(), result));
-
-        // Trigger Write Processor.
-        this.writeProcessor.runAsync();
+        Write w = new Write(data, getWriteLedger(), result);
+        w.getWriteLedger().ledger.asyncAddEntry(w.data.array(), w.data.arrayOffset(), w.data.getLength(), this::addCallback, w);
 
         // Post append tasks. We do not need to wait for these to happen before returning the call.
         result.whenCompleteAsync((address, ex) -> {
@@ -344,98 +332,12 @@ class BookKeeperLog implements DurableDataLog {
 
     @Override
     public QueueStats getQueueStatistics() {
-        return this.writes.getStatistics();
+        return new QueueStats(0, 0, 0);
     }
 
     //endregion
 
     //region Writes
-
-    /**
-     * Write Processor main loop. This method is not thread safe and should only be invoked as part of the Write Processor.
-     */
-    private void processWritesSync() {
-        if (getWriteLedger().ledger.isClosed()) {
-            // Current ledger is closed. Execute the rollover processor to safely create a new ledger. This will reinvoke
-            // the write processor upon finish, so the writes can be reattempted.
-            this.rolloverProcessor.runAsync();
-        } else if (!processPendingWrites() && !this.closed.get()) {
-            // We were not able to complete execution of all writes. Try again.
-            this.writeProcessor.runAsync();
-        }
-    }
-
-    /**
-     * Executes pending Writes to BookKeeper. This method is not thread safe and should only be invoked as part of
-     * the Write Processor.
-     * @return True if the no errors, false if at least one write failed.
-     */
-    private boolean processPendingWrites() {
-        long traceId = LoggerHelpers.traceEnterWithContext(log, this.traceObjectId, "processPendingWrites");
-
-        // Clean up the write queue of all finished writes that are complete (successfully or failed for good)
-        val cs = this.writes.removeFinishedWrites();
-        if (cs.contains(WriteQueue.CleanupStatus.WriteFailed)) {
-            // We encountered a failed write. As such, we must close immediately and not process anything else.
-            // Closing will automatically cancel all pending writes.
-            close();
-            LoggerHelpers.traceLeave(log, this.traceObjectId, "processPendingWrites", traceId, WriteQueue.CleanupStatus.WriteFailed);
-            return false;
-        } else if (cs.contains(WriteQueue.CleanupStatus.QueueEmpty)) {
-            // Queue is empty - nothing else to do.
-            LoggerHelpers.traceLeave(log, this.traceObjectId, "processPendingWrites", traceId, WriteQueue.CleanupStatus.QueueEmpty);
-            return true;
-        }
-
-        // Calculate how much estimated space there is in the current ledger.
-        final long maxTotalSize = this.config.getBkLedgerMaxSize() - getWriteLedger().ledger.getLength();
-
-        // Get the writes to execute from the queue.
-        List<Write> toExecute = this.writes.getWritesToExecute(maxTotalSize);
-
-        // Check to see if any writes executed on closed ledgers, in which case they either need to be failed (if deemed
-        // appropriate, or retried).
-        if (handleClosedLedgers(toExecute)) {
-            // If any changes were made to the Writes in the list, re-do the search to get a more accurate list of Writes
-            // to execute (since some may have changed Ledgers, more writes may not be eligible for execution).
-            toExecute = this.writes.getWritesToExecute(maxTotalSize);
-        }
-
-        // Execute the writes.
-        log.debug("{}: Executing {} writes.", this.traceObjectId, toExecute.size());
-        for (int i = 0; i < toExecute.size(); i++) {
-            Write w = toExecute.get(i);
-            try {
-                // Record the beginning of a new attempt.
-                int attemptCount = w.beginAttempt();
-                if (attemptCount > this.config.getMaxWriteAttempts()) {
-                    // Retried too many times.
-                    throw new RetriesExhaustedException(w.getFailureCause());
-                }
-
-                // Invoke the BookKeeper write.
-                w.getWriteLedger().ledger.asyncAddEntry(w.data.array(), w.data.arrayOffset(), w.data.getLength(), this::addCallback, w);
-            } catch (Throwable ex) {
-                // Synchronous failure (or RetriesExhausted). Fail current write.
-                boolean isFinal = !isRetryable(ex);
-                w.fail(ex, isFinal);
-
-                // And fail all remaining writes as well.
-                for (int j = i + 1; j < toExecute.size(); j++) {
-                    toExecute.get(j).fail(new DurableDataLogException("Previous write failed.", ex), isFinal);
-                }
-
-                LoggerHelpers.traceLeave(log, this.traceObjectId, "processPendingWrites", traceId, i);
-                return false;
-            }
-        }
-
-        // After every run where we did write, check if need to trigger a rollover.
-        this.rolloverProcessor.runAsync();
-        LoggerHelpers.traceLeave(log, this.traceObjectId, "processPendingWrites", traceId, toExecute.size());
-        return true;
-    }
-
     /**
      * Checks each Write in the given list if it is pointing to a closed WriteLedger. If so, it verifies if the write has
      * actually been committed (in case we hadn't been able to determine its outcome) and updates the Ledger, if needed.
@@ -540,13 +442,14 @@ class BookKeeperLog implements DurableDataLog {
         } finally {
             // Process all the appends in the queue after any change. This finalizes the completion, does retries (if needed)
             // and triggers more appends.
-            try {
+            //TODO: Is this necessary...
+            /*try {
                 this.writeProcessor.runAsync();
             } catch (ObjectClosedException ex) {
                 // In case of failures, the WriteProcessor may already be closed. We don't want the exception to propagate
                 // to BookKeeper.
                 log.warn("{}: Not running WriteProcessor as part of callback due to BookKeeperLog being closed.", this.traceObjectId, ex);
-            }
+            }*/
         }
     }
 
@@ -807,7 +710,6 @@ class BookKeeperLog implements DurableDataLog {
         if (!l.isClosed() && l.getLength() < this.config.getBkLedgerMaxSize()) {
             // Nothing to do. Trigger the write processor just in case this rollover was invoked because the write
             // processor got a pointer to a LedgerHandle that was just closed by a previous run of the rollover processor.
-            this.writeProcessor.runAsync();
             LoggerHelpers.traceLeave(log, this.traceObjectId, "rollover", traceId, false);
             return;
         }
@@ -846,7 +748,6 @@ class BookKeeperLog implements DurableDataLog {
         } finally {
             // It's possible that we have writes in the queue that didn't get picked up because they exceeded the predicted
             // ledger length. Invoke the Write Processor to execute them.
-            this.writeProcessor.runAsync();
             LoggerHelpers.traceLeave(log, this.traceObjectId, "rollover", traceId, true);
         }
     }
@@ -881,7 +782,6 @@ class BookKeeperLog implements DurableDataLog {
 
     private void reportMetrics() {
         this.metrics.ledgerCount(getLogMetadata().getLedgers().size());
-        this.metrics.queueStats(this.writes.getStatistics());
     }
 
     private LogMetadata getLogMetadata() {

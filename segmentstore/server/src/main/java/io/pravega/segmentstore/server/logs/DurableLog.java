@@ -106,7 +106,6 @@ public class DurableLog extends AbstractService implements OperationLog {
         this.memoryStateUpdater = new MemoryStateUpdater(this.inMemoryOperationLog, readIndex, this::triggerTailReads);
         MetadataCheckpointPolicy checkpointPolicy = new MetadataCheckpointPolicy(config, this::queueMetadataCheckpoint, this.executor);
         this.operationProcessor = new OperationProcessor(this.metadata, this.memoryStateUpdater, this.durableDataLog, checkpointPolicy, executor);
-        Services.onStop(this.operationProcessor, this::queueStoppedHandler, this::queueFailedHandler, this.executor);
         this.tailReads = new HashSet<>();
         this.closed = new AtomicBoolean();
         this.delayedStart = new CompletableFuture<>();
@@ -130,7 +129,11 @@ public class DurableLog extends AbstractService implements OperationLog {
         if (!this.closed.get()) {
             Futures.await(Services.stopAsync(this, this.executor));
 
-            this.operationProcessor.close();
+            try {
+                this.operationProcessor.close();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
             this.durableDataLog.close(); // Call this again just in case we were not able to do it in doStop().
             log.info("{}: Closed.", this.traceObjectId);
             this.closed.set(true);
@@ -187,7 +190,6 @@ public class DurableLog extends AbstractService implements OperationLog {
                 // correct failure cause), otherwise the OperationProcessor's listener will shut us down with a totally
                 // different failure cause.
                 notifyFailed(failureCause);
-                this.operationProcessor.stopAsync();
             } else {
                 doStop();
             }
@@ -198,8 +200,7 @@ public class DurableLog extends AbstractService implements OperationLog {
         return CompletableFuture
                 .supplyAsync(this::performRecovery, this.executor)
                 .thenCompose(anyItemsRecovered ->
-                        Services.startAsync(this.operationProcessor, this.executor)
-                                .thenComposeAsync(v -> anyItemsRecovered ? CompletableFuture.completedFuture(null) : queueMetadataCheckpoint(), this.executor));
+                                anyItemsRecovered ? CompletableFuture.completedFuture(null) : queueMetadataCheckpoint());
     }
 
     @SneakyThrows(Exception.class)
@@ -245,34 +246,28 @@ public class DurableLog extends AbstractService implements OperationLog {
     protected void doStop() {
         long traceId = LoggerHelpers.traceEnterWithContext(log, traceObjectId, "doStop");
         log.info("{}: Stopping.", this.traceObjectId);
-        Services.stopAsync(this.operationProcessor, this.executor)
-                .whenCompleteAsync((r, ex) -> {
-                    cancelTailReads();
+        try {
+            this.operationProcessor.close();
+            cancelTailReads();
 
-                    this.durableDataLog.close();
-                    Throwable cause = this.stopException.get();
-                    if (cause == null && this.operationProcessor.state() == State.FAILED) {
-                        cause = this.operationProcessor.failureCause();
-                    }
+            this.durableDataLog.close();
+            Throwable cause = this.stopException.get();
+            // Terminate the delayed start future now, if still active.
+            this.delayedStart.completeExceptionally(cause == null ? new ObjectClosedException(this) : cause);
 
-                    // Terminate the delayed start future now, if still active.
-                    this.delayedStart.completeExceptionally(cause == null ? new ObjectClosedException(this) : cause);
+            if (cause == null) {
+                // Normal shutdown.
+                notifyStopped();
+            } else {
+                // Shutdown caused by some failure.
+                notifyFailed(cause);
+            }
 
-                    if (cause == null) {
-                        // Normal shutdown.
-                        notifyStopped();
-                    } else {
-                        // Shutdown caused by some failure.
-                        notifyFailed(cause);
-                    }
-
-                    log.info("{}: Stopped.", this.traceObjectId);
-                    LoggerHelpers.traceLeave(log, traceObjectId, "doStop", traceId);
-                }, this.executor)
-                .exceptionally(ex -> {
-                    notifyFailed(ex);
-                    return null;
-                });
+            log.info("{}: Stopped.", this.traceObjectId);
+            LoggerHelpers.traceLeave(log, traceObjectId, "doStop", traceId);
+        } catch (Exception ex) {
+            notifyFailed(ex);
+        }
     }
 
     //endregion
