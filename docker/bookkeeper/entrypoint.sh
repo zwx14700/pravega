@@ -44,6 +44,9 @@ sed -i 's|# zkLedgersRootPath=/ledgers|zkLedgersRootPath='${BK_LEDGERS_PATH}'|' 
 sed -i '/autoRecoveryDaemonEnabled/d' ${BK_HOME}/conf/bk_server.conf
 echo autoRecoveryDaemonEnabled=${BK_AUTORECOVERY} >> ${BK_HOME}/conf/bk_server.conf
 
+sed -i '/journalBufferedWritesThreshold/d' ${BK_HOME}/conf/bk_server.conf
+echo autoRecoveryDaemonEnabled=5000000 >> ${BK_HOME}/conf/bk_server.conf
+
 echo "
 tlsProvider=OpenSSL
 # key store
