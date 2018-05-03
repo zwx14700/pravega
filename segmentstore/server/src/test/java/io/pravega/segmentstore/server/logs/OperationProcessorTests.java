@@ -10,7 +10,6 @@
 package io.pravega.segmentstore.server.logs;
 
 import com.google.common.util.concurrent.Runnables;
-import com.google.common.util.concurrent.Service;
 import io.pravega.common.ObjectClosedException;
 import io.pravega.common.util.ArrayView;
 import io.pravega.common.util.CloseableIterator;
@@ -21,7 +20,6 @@ import io.pravega.segmentstore.contracts.StreamSegmentSealedException;
 import io.pravega.segmentstore.server.ConfigHelpers;
 import io.pravega.segmentstore.server.MetadataBuilder;
 import io.pravega.segmentstore.server.ReadIndex;
-import io.pravega.segmentstore.server.ServiceListeners;
 import io.pravega.segmentstore.server.TestDurableDataLog;
 import io.pravega.segmentstore.server.TruncationMarkerRepository;
 import io.pravega.segmentstore.server.UpdateableContainerMetadata;
@@ -108,7 +106,6 @@ public class OperationProcessorTests extends OperationLogTestBase {
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, context.stateUpdater,
                 dataLog, getNoOpCheckpointPolicy(), executorService());
-        operationProcessor.startAsync().awaitRunning();
 
         // Process all generated operations.
         List<OperationWithCompletion> completionFutures = processOperations(operations, operationProcessor);
@@ -119,7 +116,7 @@ public class OperationProcessorTests extends OperationLogTestBase {
         performLogOperationChecks(completionFutures, context.memoryLog, dataLog, context.metadata);
         performMetadataChecks(streamSegmentIds, new HashSet<>(), transactions, completionFutures, context.metadata, mergeTransactions, sealStreamSegments);
         performReadIndexChecks(completionFutures, context.readIndex);
-        operationProcessor.stopAsync().awaitTerminated();
+        operationProcessor.close();
     }
 
     /**
@@ -156,7 +153,6 @@ public class OperationProcessorTests extends OperationLogTestBase {
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, context.stateUpdater,
                 dataLog, getNoOpCheckpointPolicy(), executorService());
-        operationProcessor.startAsync().awaitRunning();
 
         // Process all generated operations.
         List<OperationWithCompletion> completionFutures = processOperations(operations, operationProcessor);
@@ -200,7 +196,7 @@ public class OperationProcessorTests extends OperationLogTestBase {
         performLogOperationChecks(completionFutures, context.memoryLog, dataLog, context.metadata);
         performMetadataChecks(streamSegmentIds, streamSegmentsWithNoContents, new HashMap<>(), completionFutures, context.metadata, false, false);
         performReadIndexChecks(completionFutures, context.readIndex);
-        operationProcessor.stopAsync().awaitTerminated();
+        operationProcessor.close();
     }
 
     /**
@@ -240,7 +236,6 @@ public class OperationProcessorTests extends OperationLogTestBase {
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, context.stateUpdater,
                 dataLog, getNoOpCheckpointPolicy(), executorService());
-        operationProcessor.startAsync().awaitRunning();
 
         // Process all generated operations.
         List<OperationWithCompletion> completionFutures = processOperations(operations, operationProcessor);
@@ -268,7 +263,7 @@ public class OperationProcessorTests extends OperationLogTestBase {
         performLogOperationChecks(completionFutures, context.memoryLog, dataLog, context.metadata);
         performMetadataChecks(streamSegmentIds, new HashSet<>(), new HashMap<>(), completionFutures, context.metadata, false, false);
         performReadIndexChecks(completionFutures, context.readIndex);
-        operationProcessor.stopAsync().awaitTerminated();
+        operationProcessor.close();
     }
 
     /**
@@ -296,7 +291,6 @@ public class OperationProcessorTests extends OperationLogTestBase {
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, context.stateUpdater,
                 dataLog, getNoOpCheckpointPolicy(), executorService());
-        operationProcessor.startAsync().awaitRunning();
 
         ErrorInjector<Exception> aSyncErrorInjector = new ErrorInjector<>(
                 count -> count >= failAfterCommits,
@@ -313,10 +307,6 @@ public class OperationProcessorTests extends OperationLogTestBase {
                 super::isExpectedExceptionForNonDataCorruption);
 
         // Wait for the OperationProcessor to shutdown with failure.
-        ServiceListeners.awaitShutdown(operationProcessor, TIMEOUT, false);
-        Assert.assertEquals("Expected the OperationProcessor to fail after DurableDataLogException encountered.",
-                Service.State.FAILED, operationProcessor.state());
-
         performLogOperationChecks(completionFutures, context.memoryLog, dataLog, context.metadata);
         performMetadataChecks(streamSegmentIds, new HashSet<>(), new HashMap<>(), completionFutures, context.metadata, false, false);
         performReadIndexChecks(completionFutures, context.readIndex);
@@ -345,7 +335,6 @@ public class OperationProcessorTests extends OperationLogTestBase {
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, context.stateUpdater,
                 dataLog, getNoOpCheckpointPolicy(), executorService());
-        operationProcessor.startAsync().awaitRunning();
 
         ErrorInjector<Exception> aSyncErrorInjector = new ErrorInjector<>(
                 count -> true,
@@ -360,13 +349,6 @@ public class OperationProcessorTests extends OperationLogTestBase {
                 "No operations failed.",
                 OperationWithCompletion.allOf(completionFutures)::join,
                 ex -> ex instanceof IOException || ex instanceof DataLogWriterNotPrimaryException);
-
-        // Verify that the OperationProcessor automatically shuts down and that it has the right failure cause.
-        ServiceListeners.awaitShutdown(operationProcessor, TIMEOUT, false);
-        Assert.assertEquals("OperationProcessor is not in a failed state after fence-out detected.",
-                Service.State.FAILED, operationProcessor.state());
-        Assert.assertTrue("OperationProcessor did not fail with the correct exception.",
-                operationProcessor.failureCause() instanceof DataLogWriterNotPrimaryException);
     }
 
     /**
@@ -401,17 +383,9 @@ public class OperationProcessorTests extends OperationLogTestBase {
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, stateUpdater,
                 dataLog, getNoOpCheckpointPolicy(), executorService());
-        operationProcessor.startAsync().awaitRunning();
 
         // Process all generated operations.
         List<OperationWithCompletion> completionFutures = processOperations(operations, operationProcessor);
-
-        // Wait for the store to fail (and make sure it failed).
-        AssertExtensions.assertThrows(
-                "Operation Processor did not shut down with failure.",
-                () -> ServiceListeners.awaitShutdown(operationProcessor, true),
-                ex -> ex instanceof IllegalStateException);
-        Assert.assertEquals("Unexpected service state after encountering DataCorruptionException.", Service.State.FAILED, operationProcessor.state());
 
         // Verify that the "right" operations failed, while the others succeeded.
         int successCount = 0;
@@ -468,7 +442,6 @@ public class OperationProcessorTests extends OperationLogTestBase {
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, context.stateUpdater,
                 dataLog, getNoOpCheckpointPolicy(), executorService());
-        operationProcessor.startAsync().awaitRunning();
 
         // Process all generated operations.
         OperationWithCompletion completionFuture = processOperations(Collections.singleton(operation), operationProcessor).get(0);
@@ -477,7 +450,7 @@ public class OperationProcessorTests extends OperationLogTestBase {
         completionFuture.completion.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
 
         // Stop the processor.
-        operationProcessor.stopAsync().awaitTerminated();
+        operationProcessor.close();
     }
 
     /**
@@ -502,15 +475,11 @@ public class OperationProcessorTests extends OperationLogTestBase {
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, context.stateUpdater,
                 dataLog, getNoOpCheckpointPolicy(), executorService());
-        operationProcessor.startAsync().awaitRunning();
 
         // Process all generated operations.
         OperationWithCompletion completionFuture = processOperations(operations, operationProcessor).stream().findFirst().orElse(null);
-        operationProcessor.stopAsync();
+        operationProcessor.close();
         appendCallback.complete(new TestLogAddress(1));
-
-        // Stop the processor.
-        operationProcessor.awaitTerminated();
 
         // Wait for the operation to complete. The operation should have been cancelled (due to the OperationProcessor
         // shutting down) - no other exception (or successful completion is accepted).
