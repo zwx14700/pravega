@@ -184,10 +184,10 @@ class DataFrameBuilder<T extends SequencedItemList.Element> implements AutoClose
         try {
             this.args.beforeCommit.accept(commitArgs);
             this.targetLog.append(dataFrame.getData(), this.args.writeTimeout)
-                    .thenAcceptAsync(logAddress -> {
+                    .thenAccept(logAddress -> {
                         commitArgs.setLogAddress(logAddress);
                         this.args.commitSuccess.accept(commitArgs);
-                    }, this.args.executor)
+                    })
                     .exceptionally(ex -> handleProcessingException(ex, commitArgs));
         } catch (Throwable ex) {
             handleProcessingException(ex, commitArgs);

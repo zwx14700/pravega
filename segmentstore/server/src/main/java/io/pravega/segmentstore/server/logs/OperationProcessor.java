@@ -138,6 +138,7 @@ class OperationProcessor implements AutoCloseable {
         }
 
         synchronized (this.stateLock) {
+            this.state.addPending(operation);
             // Update Metadata and Operations with any missing data (offsets, lengths, etc) - the Metadata Updater
             // has all the knowledge for that task.
             this.metadataUpdater.preProcessOperation(entry);
@@ -146,6 +147,7 @@ class OperationProcessor implements AutoCloseable {
             entry.setSequenceNumber(this.metadataUpdater.nextOperationSequenceNumber());
             this.dataFrameBuilder.append(entry);
             this.metadataUpdater.acceptOperation(entry);
+            this.dataFrameBuilder.flush();
         }
 
         log.trace("{}: DataFrameBuilder.Append {}.", this.traceObjectId, entry);

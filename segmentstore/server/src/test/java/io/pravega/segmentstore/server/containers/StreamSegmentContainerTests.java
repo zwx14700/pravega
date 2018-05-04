@@ -126,10 +126,10 @@ import static io.pravega.common.concurrent.ExecutorServiceHelpers.newScheduledTh
  * DurableDataLog.
  */
 public class StreamSegmentContainerTests extends ThreadPooledTestSuite {
-    private static final int SEGMENT_COUNT = 100;
-    private static final int TRANSACTIONS_PER_SEGMENT = 5;
-    private static final int APPENDS_PER_SEGMENT = 100;
-    private static final int ATTRIBUTE_UPDATES_PER_SEGMENT = 50;
+    private static final int SEGMENT_COUNT = 1;
+    private static final int TRANSACTIONS_PER_SEGMENT = 2;
+    private static final int APPENDS_PER_SEGMENT = 5;
+    private static final int ATTRIBUTE_UPDATES_PER_SEGMENT = 5;
     private static final int CONTAINER_ID = 1234567;
     private static final int MAX_DATA_LOG_APPEND_SIZE = 100 * 1024;
     private static final int TEST_TIMEOUT_MILLIS = 100 * 1000;
