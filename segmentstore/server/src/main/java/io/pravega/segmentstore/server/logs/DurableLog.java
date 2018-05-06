@@ -71,7 +71,7 @@ public class DurableLog extends AbstractService implements OperationLog {
     private final UpdateableContainerMetadata metadata;
     @GuardedBy("tailReads")
     private final Set<TailRead> tailReads;
-    private final ScheduledExecutorService executor;
+    private final OrderedExecutor executor;
     private final AtomicReference<Throwable> stopException = new AtomicReference<>();
     private final AtomicBoolean closed;
     private final CompletableFuture<Void> delayedStart;
@@ -91,7 +91,7 @@ public class DurableLog extends AbstractService implements OperationLog {
      * @param executor            The Executor to use for async operations.
      * @throws NullPointerException If any of the arguments are null.
      */
-    public DurableLog(DurableLogConfig config, UpdateableContainerMetadata metadata, DurableDataLogFactory dataFrameLogFactory, ReadIndex readIndex, ScheduledExecutorService executor) {
+    public DurableLog(DurableLogConfig config, UpdateableContainerMetadata metadata, DurableDataLogFactory dataFrameLogFactory, ReadIndex readIndex, OrderedExecutor executor) {
         Preconditions.checkNotNull(config, "config");
         this.metadata = Preconditions.checkNotNull(metadata, "metadata");
         Preconditions.checkNotNull(dataFrameLogFactory, "dataFrameLogFactory");
@@ -104,7 +104,7 @@ public class DurableLog extends AbstractService implements OperationLog {
         this.traceObjectId = String.format("DurableLog[%s]", metadata.getContainerId());
         this.inMemoryOperationLog = createInMemoryLog();
         this.memoryStateUpdater = new MemoryStateUpdater(this.inMemoryOperationLog, readIndex, this::triggerTailReads);
-        MetadataCheckpointPolicy checkpointPolicy = new MetadataCheckpointPolicy(config, this::queueMetadataCheckpoint, this.executor);
+        MetadataCheckpointPolicy checkpointPolicy = new MetadataCheckpointPolicy(config, this::queueMetadataCheckpoint, this.executor.getExecutor());
         this.operationProcessor = new OperationProcessor(this.metadata, this.memoryStateUpdater, this.durableDataLog, checkpointPolicy, executor);
         this.tailReads = new HashSet<>();
         this.closed = new AtomicBoolean();
@@ -127,7 +127,7 @@ public class DurableLog extends AbstractService implements OperationLog {
     @Override
     public void close() {
         if (!this.closed.get()) {
-            Futures.await(Services.stopAsync(this, this.executor));
+            Futures.await(Services.stopAsync(this, this.executor.getExecutor()));
 
             try {
                 this.operationProcessor.close();
@@ -161,7 +161,7 @@ public class DurableLog extends AbstractService implements OperationLog {
                                 }
                                 throw new CompletionException(ex);
                             }
-                        }), this.executor)
+                        }), this.executor.getExecutor())
                 .exceptionally(this::notifyDelayedStartComplete);
     }
 
@@ -198,7 +198,7 @@ public class DurableLog extends AbstractService implements OperationLog {
 
     private CompletableFuture<Void> tryStartOnce() {
         return CompletableFuture
-                .supplyAsync(this::performRecovery, this.executor)
+                .supplyAsync(this::performRecovery, this.executor.getExecutor())
                 .thenCompose(anyItemsRecovered ->
                                 anyItemsRecovered ? CompletableFuture.completedFuture(null) : queueMetadataCheckpoint());
     }
@@ -318,7 +318,7 @@ public class DurableLog extends AbstractService implements OperationLog {
         // asynchronously for us (i.e., not via normal Log Operations) such as the Storage State. That ensures that this
         // info will be readily available upon recovery without delay.
         return add(new StorageMetadataCheckpointOperation(), timer.getRemaining())
-                .thenComposeAsync(v -> this.durableDataLog.truncate(truncationFrameAddress, timer.getRemaining()), this.executor)
+                .thenComposeAsync(v -> this.durableDataLog.truncate(truncationFrameAddress, timer.getRemaining()), this.executor.getExecutor())
                 .thenRunAsync(() -> {
                     // Truncate InMemory Transaction Log.
                     int count = this.inMemoryOperationLog.truncate(actualTruncationSequenceNumber);
@@ -326,7 +326,7 @@ public class DurableLog extends AbstractService implements OperationLog {
                     // Remove old truncation markers.
                     this.metadata.removeTruncationMarkers(actualTruncationSequenceNumber);
                     this.operationProcessor.getMetrics().operationLogTruncate(count);
-                }, this.executor);
+                }, this.executor.getExecutor());
     }
 
     @Override
@@ -345,7 +345,7 @@ public class DurableLog extends AbstractService implements OperationLog {
                 lastOp = this.inMemoryOperationLog.getLast();
                 if (lastOp == null || lastOp.getSequenceNumber() <= afterSequenceNumber) {
                     // We cannot fulfill this at this moment; let it be triggered when we do get a new operation.
-                    TailRead tailRead = new TailRead(afterSequenceNumber, maxCount, timeout, this.executor);
+                    TailRead tailRead = new TailRead(afterSequenceNumber, maxCount, timeout, this.executor.getExecutor());
                     result = tailRead.future;
                     this.tailReads.add(tailRead);
                     result.whenComplete((r, ex) -> unregisterTailRead(tailRead));
@@ -435,7 +435,7 @@ public class DurableLog extends AbstractService implements OperationLog {
     }
 
     private void triggerTailReads() {
-        this.executor.execute(() -> {
+        this.executor.getExecutor().execute(() -> {
             // Gather all the eligible tail reads.
             List<TailRead> toTrigger;
             synchronized (this.tailReads) {

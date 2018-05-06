@@ -107,7 +107,7 @@ public class DataFrameBuilderTests extends ThreadPooledTestSuite {
             List<DataFrameBuilder.CommitArgs> commitFrames = Collections.synchronizedList(new ArrayList<>());
             BiConsumer<Throwable, DataFrameBuilder.CommitArgs> errorCallback = (ex, a) ->
                     Assert.fail(String.format("Unexpected error occurred upon commit. %s", ex));
-            val args = new DataFrameBuilder.Args(DataFrameTestHelpers.appendOrder(order), commitFrames::add, errorCallback, executorService());
+            val args = new DataFrameBuilder.Args(DataFrameTestHelpers.appendOrder(order), commitFrames::add, errorCallback, null, executorService());
             try (DataFrameBuilder<TestLogItem> b = new DataFrameBuilder<>(dataLog, SERIALIZER, args)) {
                 for (int i = 0; i < records.size(); i++) {
                     try {
@@ -177,7 +177,7 @@ public class DataFrameBuilderTests extends ThreadPooledTestSuite {
             failCount.incrementAndGet();
         };
 
-        val args = new DataFrameBuilder.Args(ca -> attemptCount.incrementAndGet(), successCommits::add, errorCallback, executorService());
+        val args = new DataFrameBuilder.Args(ca -> attemptCount.incrementAndGet(), successCommits::add, errorCallback, null, executorService());
         try (DataFrameBuilder<TestLogItem> b = new DataFrameBuilder<>(dataLog, SERIALIZER, args)) {
             builderRef.set(b);
             try {
@@ -237,7 +237,7 @@ public class DataFrameBuilderTests extends ThreadPooledTestSuite {
             List<DataFrameBuilder.CommitArgs> commitFrames = Collections.synchronizedList(new ArrayList<>());
             BiConsumer<Throwable, DataFrameBuilder.CommitArgs> errorCallback = (ex, a) ->
                     Assert.fail(String.format("Unexpected error occurred upon commit. %s", ex));
-            val args = new DataFrameBuilder.Args(Callbacks::doNothing, commitFrames::add, errorCallback, executorService());
+            val args = new DataFrameBuilder.Args(Callbacks::doNothing, commitFrames::add, errorCallback, null, executorService());
 
             @Cleanup
             DataFrameBuilder<TestLogItem> b = new DataFrameBuilder<>(dataLog, SERIALIZER, args);
@@ -260,7 +260,7 @@ public class DataFrameBuilderTests extends ThreadPooledTestSuite {
             //Read all entries in the Log and interpret them as DataFrames, then verify the records can be reconstructed.
             val frames = dataLog.getAllEntries(readItem -> DataFrame.read(readItem.getPayload(), readItem.getLength(), readItem.getAddress()));
             Assert.assertEquals("Unexpected number of frames generated.", commitFrames.size(), frames.size());
-            DataFrameTestHelpers.checkReadRecords(frames, records, r -> new ByteArraySegment(r.getFullSerialization()));
+            DataFrameTestHelpers.checkReadRecords((DataFrame.DataFrameEntryIterator) frames, records, r -> new ByteArraySegment(r.getFullSerialization()));
         }
     }
 
@@ -276,7 +276,7 @@ public class DataFrameBuilderTests extends ThreadPooledTestSuite {
             List<DataFrameBuilder.CommitArgs> commitFrames = Collections.synchronizedList(new ArrayList<>());
             BiConsumer<Throwable, DataFrameBuilder.CommitArgs> errorCallback = (ex, a) ->
                     Assert.fail(String.format("Unexpected error occurred upon commit. %s", ex));
-            val args = new DataFrameBuilder.Args(DataFrameTestHelpers.appendOrder(order), commitFrames::add, errorCallback, executorService());
+            val args = new DataFrameBuilder.Args(DataFrameTestHelpers.appendOrder(order), commitFrames::add, errorCallback, null, executorService());
             try (DataFrameBuilder<TestLogItem> b = new DataFrameBuilder<>(dataLog, SERIALIZER, args)) {
                 for (TestLogItem item : records) {
                     b.append(item);

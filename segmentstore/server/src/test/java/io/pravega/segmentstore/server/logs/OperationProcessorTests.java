@@ -105,7 +105,7 @@ public class OperationProcessorTests extends OperationLogTestBase {
         dataLog.initialize(TIMEOUT);
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, context.stateUpdater,
-                dataLog, getNoOpCheckpointPolicy(), executorService());
+                dataLog, getNoOpCheckpointPolicy(), new OrderedExecutor(executorService()));
 
         // Process all generated operations.
         List<OperationWithCompletion> completionFutures = processOperations(operations, operationProcessor);
@@ -152,7 +152,7 @@ public class OperationProcessorTests extends OperationLogTestBase {
         dataLog.initialize(TIMEOUT);
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, context.stateUpdater,
-                dataLog, getNoOpCheckpointPolicy(), executorService());
+                dataLog, getNoOpCheckpointPolicy(), new OrderedExecutor(executorService()));
 
         // Process all generated operations.
         List<OperationWithCompletion> completionFutures = processOperations(operations, operationProcessor);
@@ -235,7 +235,7 @@ public class OperationProcessorTests extends OperationLogTestBase {
         dataLog.initialize(TIMEOUT);
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, context.stateUpdater,
-                dataLog, getNoOpCheckpointPolicy(), executorService());
+                dataLog, getNoOpCheckpointPolicy(), new OrderedExecutor(executorService()));
 
         // Process all generated operations.
         List<OperationWithCompletion> completionFutures = processOperations(operations, operationProcessor);
@@ -290,7 +290,7 @@ public class OperationProcessorTests extends OperationLogTestBase {
         dataLog.initialize(TIMEOUT);
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, context.stateUpdater,
-                dataLog, getNoOpCheckpointPolicy(), executorService());
+                dataLog, getNoOpCheckpointPolicy(), new OrderedExecutor(executorService()));
 
         ErrorInjector<Exception> aSyncErrorInjector = new ErrorInjector<>(
                 count -> count >= failAfterCommits,
@@ -334,7 +334,7 @@ public class OperationProcessorTests extends OperationLogTestBase {
         dataLog.initialize(TIMEOUT);
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, context.stateUpdater,
-                dataLog, getNoOpCheckpointPolicy(), executorService());
+                dataLog, getNoOpCheckpointPolicy(), new OrderedExecutor(executorService()));
 
         ErrorInjector<Exception> aSyncErrorInjector = new ErrorInjector<>(
                 count -> true,
@@ -382,7 +382,7 @@ public class OperationProcessorTests extends OperationLogTestBase {
         dataLog.initialize(TIMEOUT);
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, stateUpdater,
-                dataLog, getNoOpCheckpointPolicy(), executorService());
+                dataLog, getNoOpCheckpointPolicy(), new OrderedExecutor(executorService()));
 
         // Process all generated operations.
         List<OperationWithCompletion> completionFutures = processOperations(operations, operationProcessor);
@@ -441,7 +441,7 @@ public class OperationProcessorTests extends OperationLogTestBase {
         dataLog.initialize(TIMEOUT);
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, context.stateUpdater,
-                dataLog, getNoOpCheckpointPolicy(), executorService());
+                dataLog, getNoOpCheckpointPolicy(), new OrderedExecutor(executorService()));
 
         // Process all generated operations.
         OperationWithCompletion completionFuture = processOperations(Collections.singleton(operation), operationProcessor).get(0);
@@ -474,7 +474,7 @@ public class OperationProcessorTests extends OperationLogTestBase {
         dataLog.initialize(TIMEOUT);
         @Cleanup
         OperationProcessor operationProcessor = new OperationProcessor(context.metadata, context.stateUpdater,
-                dataLog, getNoOpCheckpointPolicy(), executorService());
+                dataLog, getNoOpCheckpointPolicy(), new OrderedExecutor(executorService()));
 
         // Process all generated operations.
         OperationWithCompletion completionFuture = processOperations(operations, operationProcessor).stream().findFirst().orElse(null);

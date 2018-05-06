@@ -23,12 +23,8 @@ import io.pravega.segmentstore.storage.DataLogWriterNotPrimaryException;
 import io.pravega.segmentstore.storage.DurableDataLog;
 import java.time.Duration;
 import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ScheduledExecutorService;
 import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
 import lombok.Getter;
@@ -53,12 +49,12 @@ class OperationProcessor implements AutoCloseable {
     private final OperationMetadataUpdater metadataUpdater;
     private final Object stateLock = new Object();
     private final QueueProcessingState state;
-    @GuardedBy("stateLock")
-    private final DataFrameBuilder<Operation> dataFrameBuilder;
     @Getter
     private final SegmentStoreMetrics.OperationProcessor metrics;
     //TODO: Ensure that a proper string is mentioned here
     private final String traceObjectId = "OperationsProcessor";
+    private final OrderedExecutor executor;
+    private final DurableDataLog durableDataLog;
 
     //endregion
 
@@ -74,15 +70,15 @@ class OperationProcessor implements AutoCloseable {
      * @param executor         An Executor to use for async operations.
      * @throws NullPointerException If any of the arguments are null.
      */
-    OperationProcessor(UpdateableContainerMetadata metadata, MemoryStateUpdater stateUpdater, DurableDataLog durableDataLog, MetadataCheckpointPolicy checkpointPolicy, ScheduledExecutorService executor) {
+    OperationProcessor(UpdateableContainerMetadata metadata, MemoryStateUpdater stateUpdater, DurableDataLog durableDataLog, MetadataCheckpointPolicy checkpointPolicy, OrderedExecutor executor) {
         Preconditions.checkNotNull(durableDataLog, "durableDataLog");
         this.metadata = metadata;
         this.stateUpdater = Preconditions.checkNotNull(stateUpdater, "stateUpdater");
         this.metadataUpdater = new OperationMetadataUpdater(this.metadata);
         this.state = new QueueProcessingState(checkpointPolicy);
-        val args = new DataFrameBuilder.Args(this.state::frameSealed, this.state::commit, this.state::fail, executor);
-        this.dataFrameBuilder = new DataFrameBuilder<>(durableDataLog, OperationSerializer.DEFAULT, args);
         this.metrics = new SegmentStoreMetrics.OperationProcessor(this.metadata.getContainerId());
+        this.executor = executor;
+        this.durableDataLog = durableDataLog;
     }
 
     //endregion
@@ -102,11 +98,13 @@ class OperationProcessor implements AutoCloseable {
         CompletableFuture<Void> result = new CompletableFuture<>();
         //TODO: use closed state to check whether this is still running ..
         log.debug("{}: process {}.", this.traceObjectId, operation);
-        try {
-            this.processOperation(new CompletableOperation(operation, result));
-        } catch (Throwable e) {
-            result.completeExceptionally(e);
-        }
+            executor.submitOrdered(this.metadata.getContainerId(), () -> {
+                try {
+                    this.processOperation(new CompletableOperation(operation, result));
+                } catch (Throwable e) {
+                    result.completeExceptionally(e);
+                }
+            });
         return result;
     }
 
@@ -130,6 +128,7 @@ class OperationProcessor implements AutoCloseable {
      */
     private void processOperation(CompletableOperation operation) throws Exception {
         Preconditions.checkState(!operation.isDone(), "The Operation has already been processed.");
+        log.trace("{}: Starting DataFrameBuilder.Append {}.", this.traceObjectId, operation);
 
         Operation entry = operation.getOperation();
         if (!entry.canSerialize()) {
@@ -138,16 +137,17 @@ class OperationProcessor implements AutoCloseable {
         }
 
         synchronized (this.stateLock) {
-            this.state.addPending(operation);
             // Update Metadata and Operations with any missing data (offsets, lengths, etc) - the Metadata Updater
             // has all the knowledge for that task.
             this.metadataUpdater.preProcessOperation(entry);
 
             // Entry is ready to be serialized; assign a sequence number.
             entry.setSequenceNumber(this.metadataUpdater.nextOperationSequenceNumber());
-            this.dataFrameBuilder.append(entry);
+            val args = new DataFrameBuilder.Args(this.state::frameSealed, this.state::commit, this.state::fail, operation, executor.getExecutor());
+            DataFrameBuilder<Operation> dataFrameBuilder = new DataFrameBuilder<>(durableDataLog, OperationSerializer.DEFAULT, args);
+            dataFrameBuilder.append(entry);
             this.metadataUpdater.acceptOperation(entry);
-            this.dataFrameBuilder.flush();
+            dataFrameBuilder.flush();
         }
 
         log.trace("{}: DataFrameBuilder.Append {}.", this.traceObjectId, entry);
@@ -179,8 +179,6 @@ class OperationProcessor implements AutoCloseable {
     @ThreadSafe
     private class QueueProcessingState {
         @GuardedBy("stateLock")
-        private ArrayList<CompletableOperation> nextFrameOperations;
-        @GuardedBy("stateLock")
         private int pendingOperationCount;
         private final MetadataCheckpointPolicy checkpointPolicy;
         @GuardedBy("stateLock")
@@ -190,31 +188,9 @@ class OperationProcessor implements AutoCloseable {
 
         private QueueProcessingState(MetadataCheckpointPolicy checkpointPolicy) {
             this.checkpointPolicy = Preconditions.checkNotNull(checkpointPolicy, "checkpointPolicy");
-            this.nextFrameOperations = new ArrayList<>();
             this.metadataTransactions = new ArrayDeque<>();
             this.highestCommittedDataFrame = -1;
             this.pendingOperationCount = 0;
-        }
-
-        /**
-         * Adds a new pending operation.
-         *
-         * @param operation The operation to append.
-         */
-        void addPending(CompletableOperation operation) {
-            boolean autoComplete = false;
-            synchronized (stateLock) {
-                if (this.nextFrameOperations.isEmpty() && !operation.getOperation().canSerialize()) {
-                    autoComplete = true;
-                } else {
-                    this.nextFrameOperations.add(operation);
-                    this.pendingOperationCount++;
-                }
-            }
-
-            if (autoComplete) {
-                operation.complete();
-            }
         }
 
         /**
@@ -239,8 +215,6 @@ class OperationProcessor implements AutoCloseable {
         void frameSealed(DataFrameBuilder.CommitArgs commitArgs) {
             synchronized (stateLock) {
                 commitArgs.setMetadataTransactionId(OperationProcessor.this.metadataUpdater.sealTransaction());
-                commitArgs.setOperations(Collections.unmodifiableList(this.nextFrameOperations));
-                this.nextFrameOperations = new ArrayList<>();
                 this.metadataTransactions.addLast(commitArgs);
             }
         }
@@ -249,7 +223,7 @@ class OperationProcessor implements AutoCloseable {
          * Callback for when a DataFrame has been successfully written to the DurableDataLog.
          * Commits all pending Metadata changes, assigns a TruncationMarker mapped to the given commitArgs and
          * acknowledges the pending operations up to the given commitArgs.
-         *
+         * <p>
          * It is important to note that this call is inclusive of all calls with arguments prior to it. It will
          * automatically complete all UpdateTransactions (and their corresponding operations) for all commitArgs that are
          * still registered but have a key smaller than the one in the given argument.
@@ -261,7 +235,6 @@ class OperationProcessor implements AutoCloseable {
             log.debug("{}: CommitSuccess ({}).", traceObjectId, commitArgs);
             Timer timer = new Timer();
 
-            List<List<CompletableOperation>> toAck = null;
             try {
                 // Record the end of a frame in the DurableDataLog directly into the base metadata. No need for locking here,
                 // as the metadata has its own.
@@ -277,33 +250,27 @@ class OperationProcessor implements AutoCloseable {
 
                     // Collect operations to commit.
                     Timer memoryCommitTimer = new Timer();
-                    toAck = collectCompletionCandidates(commitArgs);
 
                     // Commit metadata updates.
                     int updateTxnCommitCount = OperationProcessor.this.metadataUpdater.commit(commitArgs.getMetadataTransactionId());
 
-                    // Commit operations to memory. Note that this will block synchronously if the Commit Queue is full (until it clears up).
-                    toAck.forEach((op) -> {
-                        op.forEach((single) -> {
-                            try {
-                                stateUpdater.process(single.getOperation());
-                                single.complete();
-                            } catch (DataCorruptionException e) {
-                                e.printStackTrace();
-                                single.fail(e);
-                            }
-                        });
+                    // Commit operations to memory.
+                    commitArgs.getOperations().forEach((op) -> {
+                        try {
+                        stateUpdater.process(op.getOperation());
+                        } catch (DataCorruptionException e) {
+                            e.printStackTrace();
+                            op.fail(e);
+                        }
+                        CompletableFuture.runAsync(() -> {
+                                op.complete();
+                        }, executor.getExecutor());
                     });
 
                     this.highestCommittedDataFrame = addressSequence;
                     metrics.memoryCommit(updateTxnCommitCount, memoryCommitTimer.getElapsed());
                 }
             } finally {
-                if (toAck != null) {
-                    toAck.stream().flatMap(Collection::stream).forEach(CompletableOperation::complete);
-                    metrics.operationsCompleted(toAck, timer.getElapsed());
-                }
-                autoCompleteIfNeeded();
                 this.checkpointPolicy.recordCommit(commitArgs.getDataFrameLength());
             }
         }
@@ -312,19 +279,18 @@ class OperationProcessor implements AutoCloseable {
          * Callback for when a DataFrame has failed to be written to the DurableDataLog.
          * Rolls back pending Metadata changes that are mapped to the given commitArgs (and after) and fails all pending
          * operations that are affected.
-         *
+         * <p>
          * It is important to note that this call is inclusive of all calls with arguments after it. It will automatically
          * complete all UpdateTransactions (and their corresponding operations) for all commitArgs that are registered but
          * have a key larger than the one in the given argument.
          *
-         * @param ex The cause of the failure. The operations will be failed with this as a cause.
+         * @param ex         The cause of the failure. The operations will be failed with this as a cause.
          * @param commitArgs The Data Frame Commit Args that triggered this action.
          */
         void fail(Throwable ex, DataFrameBuilder.CommitArgs commitArgs) {
-            List<CompletableOperation> toFail = null;
+            List<CompletableOperation> toFail = commitArgs.getOperations();
             try {
                 synchronized (stateLock) {
-                    toFail = collectFailureCandidates(commitArgs);
                     this.pendingOperationCount -= toFail.size();
                 }
             } finally {
@@ -332,14 +298,7 @@ class OperationProcessor implements AutoCloseable {
                     toFail.forEach(o -> failOperation(o, ex));
                     metrics.operationsFailed(toFail);
                 }
-
-                autoCompleteIfNeeded();
             }
-
-            // All exceptions are final. If we cannot write to DurableDataLog, the safest way out is to shut down and
-            // perform a new recovery that will detect any possible data loss or corruption.
-            // TODO: Find out what this call is doing
-            // Callbacks.invokeSafely(OperationProcessor.this::errorHandler, ex, null);
         }
 
         /**
@@ -352,91 +311,6 @@ class OperationProcessor implements AutoCloseable {
         void failOperation(CompletableOperation operation, Throwable failureCause) {
             operation.fail(failureCause);
         }
-
-        /**
-         * Collects all Operations that have been successfully committed to DurableDataLog and removes the associated
-         * Metadata Update Transactions for those commits. The operations themselves are not completed (since we are
-         * holding a lock) and the Metadata is not updated while executing this method.
-         *
-         * @param commitArgs The CommitArgs that points to the DataFrame which successfully committed.
-         * @return An ordered List of ordered Lists of Operations that have been committed.
-         */
-        @GuardedBy("stateLock")
-        private List<List<CompletableOperation>> collectCompletionCandidates(DataFrameBuilder.CommitArgs commitArgs) {
-            List<List<CompletableOperation>> toAck = new ArrayList<>();
-            long transactionId = commitArgs.getMetadataTransactionId();
-            boolean checkpointExists = false;
-            while (!this.metadataTransactions.isEmpty() && this.metadataTransactions.peekFirst().getMetadataTransactionId() <= transactionId) {
-                DataFrameBuilder.CommitArgs t = this.metadataTransactions.pollFirst();
-                checkpointExists |= t.getMetadataTransactionId() == transactionId;
-                if (t.getOperations().size() > 0) {
-                    toAck.add(t.getOperations());
-                    this.pendingOperationCount -= t.getOperations().size();
-                }
-            }
-
-            assert checkpointExists : "No Metadata UpdateTransaction found for " + commitArgs;
-            return toAck;
-        }
-
-        /**
-         * Rolls back any metadata that is affected by a failure for the given commit args and collects all pending
-         * CompletableOperations that are affected. While the metadata is rolled back, the operations themselves
-         * are not failed (since this method executes while holding the lock).
-         *
-         * @param commitArgs The CommitArgs that points to the DataFrame which failed to commit.
-         * @return A List where the failure candidates will be collected.
-         */
-        @GuardedBy("stateLock")
-        private List<CompletableOperation> collectFailureCandidates(DataFrameBuilder.CommitArgs commitArgs) {
-            // Discard all updates to the metadata.
-            List<CompletableOperation> candidates = new ArrayList<>();
-            if (commitArgs != null) {
-                // Rollback all changes to the metadata from this commit on, and fail all involved operations.
-                OperationProcessor.this.metadataUpdater.rollback(commitArgs.getMetadataTransactionId());
-                while (!this.metadataTransactions.isEmpty() && this.metadataTransactions.peekLast().getMetadataTransactionId() >= commitArgs.getMetadataTransactionId()) {
-                    // Fail all operations in this particular commit.
-                    DataFrameBuilder.CommitArgs t = this.metadataTransactions.pollLast();
-                    candidates.addAll(t.getOperations());
-                }
-            } else {
-                // Rollback all changes to the metadata and fail all outstanding commits.
-                this.metadataTransactions.forEach(t -> candidates.addAll(t.getOperations()));
-                this.metadataTransactions.clear();
-                OperationProcessor.this.metadataUpdater.rollback(0);
-            }
-
-            candidates.addAll(this.nextFrameOperations);
-            this.nextFrameOperations.clear();
-            return candidates;
-        }
-
-        /**
-         * Auto-completes any non-serialization operations at the beginning of the Pending Operations queue. Due to their
-         * nature, these operations are at risk of never being completed, and, if there are no more pending operations
-         * before that, they can be completed without further delay.
-         */
-        private void autoCompleteIfNeeded() {
-            Collection<CompletableOperation> toComplete = null;
-            synchronized (stateLock) {
-                for (CompletableOperation o : this.nextFrameOperations) {
-                    if (o.getOperation().canSerialize()) {
-                        break;
-                    }
-
-                    if (toComplete == null) {
-                        toComplete = new ArrayList<>();
-                    }
-
-                    toComplete.add(o);
-                }
-            }
-
-            if (toComplete != null) {
-                toComplete.forEach(CompletableOperation::complete);
-            }
-        }
+        //endregion
     }
-
-    //endregion
 }

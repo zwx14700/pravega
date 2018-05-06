@@ -10,6 +10,7 @@
 package io.pravega.segmentstore.server.logs;
 
 import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableList;
 import io.pravega.common.Exceptions;
 import io.pravega.common.ObjectClosedException;
 import io.pravega.common.util.SequencedItemList;
@@ -179,15 +180,15 @@ class DataFrameBuilder<T extends SequencedItemList.Element> implements AutoClose
         Exceptions.checkArgument(dataFrame.isSealed(), "dataFrame", "Cannot publish a non-sealed DataFrame.");
 
         // Write DataFrame to DataFrameLog.
-        CommitArgs commitArgs = new CommitArgs(this.lastSerializedSequenceNumber, this.lastStartedSequenceNumber, dataFrame.getLength());
+        CommitArgs commitArgs = new CommitArgs(this.lastSerializedSequenceNumber, this.lastStartedSequenceNumber, ImmutableList.of(this.args.operation), dataFrame.getLength());
 
         try {
             this.args.beforeCommit.accept(commitArgs);
             this.targetLog.append(dataFrame.getData(), this.args.writeTimeout)
-                    .thenAccept(logAddress -> {
+                    .thenAcceptAsync(logAddress -> {
                         commitArgs.setLogAddress(logAddress);
                         this.args.commitSuccess.accept(commitArgs);
-                    })
+                    }, this.args.executor)
                     .exceptionally(ex -> handleProcessingException(ex, commitArgs));
         } catch (Throwable ex) {
             handleProcessingException(ex, commitArgs);
@@ -264,7 +265,7 @@ class DataFrameBuilder<T extends SequencedItemList.Element> implements AutoClose
          * @param lastStartedSequenceNumber         The Sequence Number of the last LogItem that was started (but not necessarily committed).
          * @param dataFrameLength                   The length of the DataFrame that is to be committed.
          */
-        private CommitArgs(long lastFullySerializedSequenceNumber, long lastStartedSequenceNumber, int dataFrameLength) {
+        private CommitArgs(long lastFullySerializedSequenceNumber, long lastStartedSequenceNumber, List<CompletableOperation> operations, int dataFrameLength) {
             assert lastFullySerializedSequenceNumber <= lastStartedSequenceNumber : "lastFullySerializedSequenceNumber (" +
                     lastFullySerializedSequenceNumber + ") is greater than lastStartedSequenceNumber (" + lastStartedSequenceNumber + ")";
 
@@ -272,7 +273,9 @@ class DataFrameBuilder<T extends SequencedItemList.Element> implements AutoClose
             this.lastStartedSequenceNumber = lastStartedSequenceNumber;
             this.dataFrameLength = dataFrameLength;
             this.logAddress = new AtomicReference<>();
+            this.operations = operations;
         }
+
 
         /**
          * Gets a value representing the LogAddress of the Data Frame that was committed.
@@ -319,6 +322,11 @@ class DataFrameBuilder<T extends SequencedItemList.Element> implements AutoClose
          * have not previously been acknowledged, should be failed.
          */
         final BiConsumer<Throwable, CommitArgs> commitFailure;
+
+        /**
+         * Operation for this frame.
+         */
+        final CompletableOperation operation;
         final Executor executor;
         final Duration writeTimeout = Duration.ofSeconds(30); // TODO: actual timeout.
     }

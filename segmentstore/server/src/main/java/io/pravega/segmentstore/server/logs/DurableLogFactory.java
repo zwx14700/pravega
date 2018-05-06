@@ -9,21 +9,21 @@
  */
 package io.pravega.segmentstore.server.logs;
 
+import com.google.common.base.Preconditions;
 import io.pravega.segmentstore.server.OperationLog;
 import io.pravega.segmentstore.server.OperationLogFactory;
 import io.pravega.segmentstore.server.ReadIndex;
 import io.pravega.segmentstore.server.UpdateableContainerMetadata;
 import io.pravega.segmentstore.storage.DurableDataLogFactory;
-import com.google.common.base.Preconditions;
-
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 
 /**
  * Default Factory for DurableLogs.
  */
 public class DurableLogFactory implements OperationLogFactory {
     private final DurableDataLogFactory dataLogFactory;
-    private final ScheduledExecutorService executor;
+    private final OrderedExecutor executor;
     private final DurableLogConfig config;
 
     /**
@@ -38,7 +38,7 @@ public class DurableLogFactory implements OperationLogFactory {
         Preconditions.checkNotNull(dataLogFactory, "dataLogFactory");
         Preconditions.checkNotNull(executor, "executor");
         this.dataLogFactory = dataLogFactory;
-        this.executor = executor;
+        this.executor = new OrderedExecutor((ScheduledThreadPoolExecutor) executor);
         this.config = config;
     }
 
