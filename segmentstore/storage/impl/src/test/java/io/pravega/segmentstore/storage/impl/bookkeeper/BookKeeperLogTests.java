@@ -206,11 +206,11 @@ public abstract class BookKeeperLogTests extends DurableDataLogTestBase {
                 AssertExtensions.assertThrows(
                         "First write did not fail with the appropriate exception.",
                         () -> log.append(new ByteArraySegment(getWriteData()), TIMEOUT),
-                        ex -> ex instanceof RetriesExhaustedException
-                                && (ex.getCause() instanceof DataLogNotAvailableException
-                                || isLedgerClosedException(ex.getCause()))
+                        ex -> ex instanceof DataLogNotAvailableException
+                                && (ex instanceof DataLogNotAvailableException
+                                || isLedgerClosedException(ex)
                                 || ex instanceof ObjectClosedException
-                                || ex instanceof CancellationException);
+                                || ex instanceof CancellationException));
 
                 // Subsequent writes should be rejected since the BookKeeperLog is now closed.
                 AssertExtensions.assertThrows(

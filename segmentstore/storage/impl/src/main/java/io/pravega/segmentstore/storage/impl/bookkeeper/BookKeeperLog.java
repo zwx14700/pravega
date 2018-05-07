@@ -516,8 +516,7 @@ class BookKeeperLog implements DurableDataLog {
      */
     private static boolean isRetryable(Throwable ex) {
         ex = Exceptions.unwrap(ex);
-        return ex instanceof WriteFailureException
-                || ex instanceof DataLogNotAvailableException;
+        return false;
     }
 
     /**
