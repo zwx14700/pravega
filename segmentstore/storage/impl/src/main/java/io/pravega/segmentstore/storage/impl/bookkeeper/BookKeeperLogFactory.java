@@ -28,6 +28,7 @@ import org.apache.curator.framework.CuratorFramework;
  * Factory for BookKeeperLogs.
  */
 @Slf4j
+@SuppressWarnings("deprecation")
 public class BookKeeperLogFactory implements DurableDataLogFactory {
     //region Members
 

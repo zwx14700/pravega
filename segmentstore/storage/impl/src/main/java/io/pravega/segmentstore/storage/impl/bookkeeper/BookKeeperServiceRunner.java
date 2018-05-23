@@ -36,6 +36,7 @@ import org.apache.zookeeper.ZooDefs;
  */
 @Slf4j
 @Builder
+@SuppressWarnings("deprecation")
 public class BookKeeperServiceRunner implements AutoCloseable {
     //region Members
 
