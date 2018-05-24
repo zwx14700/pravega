@@ -48,6 +48,7 @@ import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.BeforeClass;
+import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.Timeout;
@@ -168,7 +169,7 @@ public abstract class BookKeeperLogTests extends DurableDataLogTestBase {
     /**
      * Tests the BookKeeperLogFactory and its initialization.
      */
-    @Test
+    @Ignore
     public void testFactoryInitialize() {
         BookKeeperConfig bkConfig = BookKeeperConfig
                 .builder()
