@@ -16,10 +16,13 @@ RUN apt-get update \
 &&  mkdir -p /opt \
 &&  cd /opt
 
-ENV BOOKKEEPER_VERSION=4.5.0 \
+ENV BOOKKEEPER_VERSION=4.7.0 \
     ZOOKEEPER_VERSION=3.5.3-beta
 
-RUN wget http://central.maven.org/maven2/org/apache/bookkeeper/bookkeeper-server/$BOOKKEEPER_VERSION/bookkeeper-server-$BOOKKEEPER_VERSION-bin.tar.gz \
+#http://apache.claz.org/bookkeeper/bookkeeper-4.7.0/bookkeeper-server-4.7.0-bin.tar.gz
+#RUN wget http://central.maven.org/maven2/org/apache/bookkeeper/bookkeeper-server/$BOOKKEEPER_VERSION/bookkeeper-server-$BOOKKEEPER_VERSION-bin.tar.gz \
+
+RUN wget http://apache.claz.org/bookkeeper/bookkeeper-$BOOKKEEPER_VERSION/bookkeeper-server-$BOOKKEEPER_VERSION-bin.tar.gz \
 &&  tar xvzf  bookkeeper-server-$BOOKKEEPER_VERSION-bin.tar.gz \
 &&  mv bookkeeper-server-$BOOKKEEPER_VERSION /opt/bookkeeper
 
