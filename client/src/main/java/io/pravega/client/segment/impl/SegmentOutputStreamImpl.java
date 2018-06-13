@@ -304,6 +304,7 @@ class SegmentOutputStreamImpl implements SegmentOutputStream {
         @Override
         public void segmentIsSealed(SegmentIsSealed segmentIsSealed) {
             log.info("Received SegmentSealed {} on writer {}", segmentIsSealed, writerId);
+            state.exception = new SegmentSealedException(segmentName);
             invokeResendCallBack(segmentIsSealed);
         }
 
