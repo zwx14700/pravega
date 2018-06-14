@@ -310,6 +310,7 @@ class SegmentOutputStreamImpl implements SegmentOutputStream {
 
         @Override
         public void noSuchSegment(NoSuchSegment noSuchSegment) {
+            state.exception = new NoSuchSegmentException(segmentName);
             log.info("Segment being written to {} by writer {} no longer exists due to Stream Truncation, resending to the newer segment.",
                     noSuchSegment.getSegment(), writerId);
             invokeResendCallBack(noSuchSegment);
