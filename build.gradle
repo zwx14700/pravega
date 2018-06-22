@@ -291,7 +291,7 @@ project('segmentstore:server:host') {
         testCompile group: 'org.apache.hadoop', name: 'hadoop-minicluster', version: hadoopVersion, withoutLogger
         testCompile project(path:':segmentstore:storage:impl', configuration:'testRuntime')
         testCompile group: 'commons-httpclient', name: 'commons-httpclient', version: '3.1'
-        testCompile group: "javax.ws.rs", module: "jsr311-api"
+        testCompile group: "javax.ws.rs", name: "jsr311-api"
         compile 'io.jsonwebtoken:jjwt:0.9.0'
     }
 
