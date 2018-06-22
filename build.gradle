@@ -272,6 +272,10 @@ project('segmentstore:server:host') {
         into "conf"
     }
 
+    configurations {
+        runtime.exclude group: "javax.ws.rs", module: "jsr311-api"
+    }
+
     dependencies {
         compile project(':common')
         compile project(":shared:authplugin")
@@ -564,6 +568,7 @@ project('standalone') {
     configurations {
         runtime.exclude group: "com.sun.jersey", module: "jersey-core"
         runtime.exclude group: "com.sun.jersey", module: "jersey-server"
+        runtime.exclude group: "javax.ws.rs", module: "jsr311-api"
     }
 
     task startStandalone(type: JavaExec) {
