@@ -9,11 +9,11 @@ You may obtain a copy of the License at
 -->
 # Reader Groups Design
 
-_To be updated to reflect recent implementation details (05/07/2017)_
-
 ## Motivation 
-A set of Readers can be grouped together in order that the set of Events in a Stream can be read in parallel.  The grouping of Readers is called a Readers Group.  Pravega guarantees that each Event in the Stream is read by exactly one Reader in the Readers Group. 
+Often an application needs multiple processes to handle all of the events from a stream. A reader group provides a way to do this. A reader group is a group of readers that collectivly receive all of the events in a stream with each reader in the group receiving only a portion of them.
+Pravega guarantees that each Event in the Stream is read by exactly one Reader in the Readers Group. 
 
+##Implementation
 Each Reader in a ReaderGroup is assigned zero or more Segments.
 The Reader assigned to a Segment is the only Reader within the ReaderGroup that reads Events from that Segment.  This is the fundamental mechanism by which Pravega makes ordering guarantees of Event delivery to a Reader – a Reader will receive Events in the order they were published into a Segment.
 There are several challenges associated with this mechanism:
@@ -22,7 +22,7 @@ There are several challenges associated with this mechanism:
 -	How to manage the above mapping when Readers are added to the ReaderGroup 
 -	How to manage the above mapping when Readers leave the ReaderGroup either by an explicit operation or the Reader becoming unavailable due to network outage or the Reader process failing
 
-To solve these problems we can use [[StateSynchronizer|StateSynchronizer-design]] to enable readers to coordinate among themselves.
+To solve these problems the pravega client internally uses [[StateSynchronizer|StateSynchronizer-design]] to enable readers to coordinate among themselves.
 
 ### How Consistent replicated state can be used to solve the problem
 A consistent replicated state object representing the ReaderGroup metadata will be created in each reader.  This ReaderGroup metadata consists of:
@@ -38,7 +38,7 @@ Given this information:
 * This allows readers to take action directly to ensure all the events are read without the need for some external tracker.
 
 ## ReaderGroup APIs
-The external APIs to manage ReaderGroups could be added to the StreamManager object. They would consist of:
+The external APIs to manage ReaderGroups could be added to the StreamManager object. They consist of:
 
     ReaderGroup createReaderGroup(String name, Stream stream, ReaderGroupConfig config);
     ReaderGroup getReaderGroup(String name, Stream stream);
@@ -52,7 +52,7 @@ When a ReaderGroup is created, it creates a [[StateSynchronizer|StateSynchronize
 When readers join the group they use the state to determine which segments to read from. When they shut down they update the state so that other readers can take over their segments.
 
 # Failure detector
-We still need some sort of heartbeating mechanism to tell if Readers are alive. The problem is greatly simplified because it need not produce a view of the cluster or manage any state. The component would just need to detect failures and invoke the <code>void readerOffline(String readerId, Position lastPosition);</code> api on the ReaderGroup
+Applications still need a way to tell if Readers are alive. The app just needs to detect failures and invoke the <code>void readerOffline(String readerId, Position lastPosition);</code> api on the ReaderGroup
 
 For consistency, the Failure detector should not declare a host as dead that is still processing events. Doing so could violate exactly once processing guarantees.
 
