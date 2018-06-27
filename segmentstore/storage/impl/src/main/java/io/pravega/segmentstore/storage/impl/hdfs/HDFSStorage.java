@@ -88,6 +88,7 @@ class HDFSStorage implements SyncStorage {
     private final AtomicBoolean closed;
     private long epoch;
     private FileSystem fileSystem;
+    private int bufferSize;
 
     //endregion
 
@@ -147,6 +148,7 @@ class HDFSStorage implements SyncStorage {
 
         this.epoch = epoch;
         this.fileSystem = openFileSystem(conf);
+        this.bufferSize = conf.getInt("io.file.buffer.size", 4096);
         log.info("Initialized (HDFSHost = '{}', Epoch = {}).", this.config.getHdfsHostURL(), epoch);
     }
 
@@ -352,7 +354,7 @@ class HDFSStorage implements SyncStorage {
         }
 
         Timer timer = new Timer();
-        try (FSDataOutputStream stream = this.fileSystem.append(status.getPath())) {
+        try (FSDataOutputStream stream = this.fileSystem.append(status.getPath(), bufferSize)) {
             if (offset != status.getLen()) {
                 // Do the handle offset validation here, after we open the file. We want to throw FileNotFoundException
                 // before we throw BadOffsetException.
@@ -457,7 +459,7 @@ class HDFSStorage implements SyncStorage {
         Path fullPath = getFilePath(streamSegmentName, 0);
         try {
             // Create the file, and then immediately close the returned OutputStream, so that HDFS may properly create the file.
-            this.fileSystem.create(fullPath, READWRITE_PERMISSION, false, 0, this.config.getReplication(),
+            this.fileSystem.create(fullPath, READWRITE_PERMISSION, false, bufferSize, this.config.getReplication(),
                     this.config.getBlockSize(), null).close();
             log.debug("Created '{}'.", fullPath);
         } catch (IOException e) {
@@ -638,7 +640,7 @@ class HDFSStorage implements SyncStorage {
     private int readInternal(SegmentHandle handle, byte[] buffer, long offset, int bufferOffset, int length) throws IOException {
         //There is only one file per segment.
         FileStatus currentFile = findStatusForSegment(handle.getSegmentName(), true);
-        try (FSDataInputStream stream = this.fileSystem.open(currentFile.getPath())) {
+        try (FSDataInputStream stream = this.fileSystem.open(currentFile.getPath(), bufferSize)) {
             if (offset + length > stream.available()) {
                 throw new ArrayIndexOutOfBoundsException();
             }
