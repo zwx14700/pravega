@@ -23,7 +23,7 @@ import org.apache.hadoop.ipc.RemoteException;
 /**
  * Helps translate HDFS specific Exceptions to Pravega-equivalent Exceptions.
  */
-final class HDFSExceptionHelpers {
+public final class HDFSExceptionHelpers {
 
     /**
      * Translates HDFS specific Exceptions to Pravega-equivalent Exceptions.
@@ -32,7 +32,7 @@ final class HDFSExceptionHelpers {
      * @param e           The exception to be translated.
      * @return  The exception to be thrown.
      */
-    static <T> StreamSegmentException convertException(String segmentName, Throwable e) {
+    public static <T> StreamSegmentException convertException(String segmentName, Throwable e) {
         if (e instanceof RemoteException) {
             e = ((RemoteException) e).unwrapRemoteException();
         }
@@ -54,7 +54,7 @@ final class HDFSExceptionHelpers {
      * @param segmentName The name of the segment to construct the Exception for.
      * @return The new exception.
      */
-    static FileAlreadyExistsException segmentExistsException(String segmentName) {
+    public static FileAlreadyExistsException segmentExistsException(String segmentName) {
         return new FileAlreadyExistsException(segmentName);
     }
 
@@ -64,7 +64,7 @@ final class HDFSExceptionHelpers {
      * @param segmentName The name of the segment to construct the Exception for.
      * @return The new exception.
      */
-    static FileNotFoundException segmentNotExistsException(String segmentName) {
+    public static FileNotFoundException segmentNotExistsException(String segmentName) {
         return new FileNotFoundException(segmentName);
     }
 

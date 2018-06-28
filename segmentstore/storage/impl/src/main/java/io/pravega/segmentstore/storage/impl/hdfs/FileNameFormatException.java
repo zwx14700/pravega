@@ -14,15 +14,15 @@ import java.io.IOException;
 /**
  * Exception that indicates a malformed file name.
  */
-class FileNameFormatException extends IOException {
+public class FileNameFormatException extends IOException {
 
     private static final long serialVersionUID = 1L;
 
-    FileNameFormatException(String fileName, String message) {
+    public FileNameFormatException(String fileName, String message) {
         super(getMessage(fileName, message));
     }
 
-    FileNameFormatException(String fileName, String message, Throwable cause) {
+    public FileNameFormatException(String fileName, String message, Throwable cause) {
         super(getMessage(fileName, message), cause);
     }
 

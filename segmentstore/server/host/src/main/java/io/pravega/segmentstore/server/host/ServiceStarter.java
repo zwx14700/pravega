@@ -28,6 +28,7 @@ import io.pravega.segmentstore.storage.impl.filesystem.FileSystemStorageConfig;
 import io.pravega.segmentstore.storage.impl.filesystem.FileSystemStorageFactory;
 import io.pravega.segmentstore.storage.impl.hdfs.HDFSStorageConfig;
 import io.pravega.segmentstore.storage.impl.hdfs.HDFSStorageFactory;
+import io.pravega.segmentstore.storage.impl.noappendhdfs.NoAppendHDFSStorageFactory;
 import io.pravega.segmentstore.storage.impl.rocksdb.RocksDBCacheFactory;
 import io.pravega.segmentstore.storage.impl.rocksdb.RocksDBConfig;
 import io.pravega.segmentstore.storage.mocks.InMemoryDurableDataLogFactory;
@@ -171,6 +172,9 @@ public final class ServiceStarter {
                     return new ExtendedS3StorageFactory(extendedS3Config, setup.getStorageExecutor());
                 case INMEMORY:
                     return new InMemoryStorageFactory(setup.getStorageExecutor());
+                case NOAPPEND_HDFS:
+                    hdfsConfig = setup.getConfig(HDFSStorageConfig::builder);
+                    return new NoAppendHDFSStorageFactory(hdfsConfig, setup.getStorageExecutor());
                 default:
                     throw new IllegalStateException("Unsupported storage implementation: " + this.serviceConfig.getStorageImplementation());
             }

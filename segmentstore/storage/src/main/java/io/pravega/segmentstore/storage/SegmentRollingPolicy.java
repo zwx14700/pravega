@@ -17,6 +17,7 @@ import lombok.Getter;
  */
 public final class SegmentRollingPolicy {
     public static final SegmentRollingPolicy NO_ROLLING = new SegmentRollingPolicy(Long.MAX_VALUE);
+    public static final SegmentRollingPolicy ALWAYS_ROLLING = new SegmentRollingPolicy(1);
 
     /**
      * Maximum length, as allowed by this Rolling Policy.

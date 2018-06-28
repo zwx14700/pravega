@@ -86,7 +86,12 @@ public class ServiceConfig {
         /**
          * InMemory Storage. Contents will be lost when the process exits.
          */
-        INMEMORY
+        INMEMORY,
+
+        /**
+         * Storage which does not use `append()`. Currently only HDFS.
+         */
+        NOAPPEND_HDFS;
     }
 
     //endregion

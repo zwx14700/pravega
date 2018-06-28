@@ -18,7 +18,7 @@ import org.apache.http.annotation.ThreadSafe;
  * Base Handle for HDFSStorage.
  */
 @ThreadSafe
-class HDFSSegmentHandle implements SegmentHandle {
+public class HDFSSegmentHandle implements SegmentHandle {
     //region Members
 
     @Getter
@@ -46,7 +46,7 @@ class HDFSSegmentHandle implements SegmentHandle {
      * @param segmentName The name of the Segment to create the handle for.
      * @return The new handle.
      */
-    static HDFSSegmentHandle write(String segmentName) {
+    public static HDFSSegmentHandle write(String segmentName) {
         return new HDFSSegmentHandle(segmentName, false);
     }
 
@@ -56,7 +56,7 @@ class HDFSSegmentHandle implements SegmentHandle {
      * @param segmentName The name of the Segment to create the handle for.
      * @return The new handle.
      */
-    static HDFSSegmentHandle read(String segmentName) {
+    public static HDFSSegmentHandle read(String segmentName) {
         return new HDFSSegmentHandle(segmentName, true);
     }
 
