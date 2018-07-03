@@ -15,14 +15,11 @@ import io.pravega.common.LoggerHelpers;
 import io.pravega.common.Timer;
 import io.pravega.common.util.RetriesExhaustedException;
 import io.pravega.common.util.Retry;
-import io.pravega.segmentstore.contracts.BadOffsetException;
 import io.pravega.segmentstore.contracts.SegmentProperties;
 import io.pravega.segmentstore.contracts.StreamSegmentException;
 import io.pravega.segmentstore.contracts.StreamSegmentInformation;
-import io.pravega.segmentstore.contracts.StreamSegmentNotExistsException;
 import io.pravega.segmentstore.contracts.StreamSegmentSealedException;
 import io.pravega.segmentstore.storage.SegmentHandle;
-import io.pravega.segmentstore.storage.StorageNotPrimaryException;
 import io.pravega.segmentstore.storage.SyncStorage;
 import io.pravega.segmentstore.storage.impl.hdfs.FileNameFormatException;
 import io.pravega.segmentstore.storage.impl.hdfs.HDFSExceptionHelpers;
@@ -38,6 +35,7 @@ import java.util.stream.Collectors;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
+import org.apache.commons.lang.NotImplementedException;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
@@ -49,17 +47,34 @@ import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.io.IOUtils;
 
 /**
- * Storage adapter for a backing HDFS Store which does not use append.
+ * Storage adapter for a backing HDFS Store which implements fencing using file-chaining strategy.
  * <p>
- *     A single file is created and written to exactly once. As create of HDFS is atomic, we do not need any fencing here.
+ * For each segment, there is exactly one file in the file system, adopting the following pattern: {segment-name}_{epoch}.
+ * <ul>
+ * <li> {segment-name} is the name of the segment as used in the SegmentStore
+ * <li> {epoch} is the Container Epoch which has ownership of that segment.
+ * </ul>
+ * <p>
+ * Example: Segment "foo" can have one of these files
+ * <ol>
+ * <li> foo_<epoch>: Segment file, owned by a SegmentStore running under epoch "epoch".
+ * <li> foo_sealed: A sealed segment.
+ * <p>
+ * When a container fails over and needs to reacquire ownership of a segment, it renames the segment file as foo_<current_epoch>.
+ * After creation of the file, the filename is checked again. If there exists any file with higher epoch, the current file is deleted
+ * and access is ceded to the owner with highest epoch.
+ * <p>
+ * When a fail over happens, the previous Container (if still active) will detect that its file is not present and is renamed to
+ * a file with higher epoch and know it's time to stop all activity for that segment (i.e., it was fenced out).
  * <p>
  */
 @Slf4j
 class NoAppendHDFSStorage implements SyncStorage {
     private static final String PART_SEPARATOR = "_";
-    private static final String NAME_FORMAT = "%s";
+    private static final String NAME_FORMAT = "%s" + PART_SEPARATOR + "%s";
     private static final String SEALED = "sealed";
-    private static final String SUFFIX_GLOB_REGEX = "";
+    private static final String META = "meta";
+    private static final String SUFFIX_GLOB_REGEX = "{" + "[0-9]*" + "," + SEALED + "," + META + "}";
     private static final String EXAMPLE_NAME_FORMAT = String.format(NAME_FORMAT, "<segment-name>", "<epoch>");
     private static final FsPermission READWRITE_PERMISSION = new FsPermission(FsAction.READ_WRITE, FsAction.NONE, FsAction.NONE);
     private static final FsPermission READONLY_PERMISSION = new FsPermission(FsAction.READ, FsAction.READ, FsAction.READ);
@@ -145,9 +160,14 @@ class NoAppendHDFSStorage implements SyncStorage {
         long traceId = LoggerHelpers.traceEnter(log, "getStreamSegmentInfo", streamSegmentName);
         try {
             return HDFS_RETRY.run(() -> {
-                FileStatus last = findStatusForSegment(streamSegmentName, false);
-                boolean isSealed = isSealed(last.getPath());
-                StreamSegmentInformation result = StreamSegmentInformation.builder().name(streamSegmentName).length(last.getLen()).sealed(isSealed).build();
+                FileStatus last = findStatusForSegment(streamSegmentName, true);
+                boolean isSealed = isSealed(last);
+                SegmentProperties result;
+                if (last == null) {
+                    result = StreamSegmentInformation.builder().name(streamSegmentName).length(0).sealed(isSealed).build();
+                } else {
+                    result = StreamSegmentInformation.builder().name(streamSegmentName).length(last.getLen()).sealed(isSealed).build();
+                }
                 LoggerHelpers.traceLeave(log, "getStreamSegmentInfo", traceId, streamSegmentName, result);
                 return result;
             });
@@ -158,11 +178,6 @@ class NoAppendHDFSStorage implements SyncStorage {
         }
     }
 
-    /**
-     *
-     * @param streamSegmentName The name of the StreamSegment.
-     * @return exists is NOOP and reentrant
-     */
     @Override
     public boolean exists(String streamSegmentName) {
         ensureInitializedAndNotClosed();
@@ -174,21 +189,13 @@ class NoAppendHDFSStorage implements SyncStorage {
             // HDFS could not find the file. Returning false.
             log.warn("Got exception checking if file exists", e);
         }
-        boolean exists = true;
+        boolean exists = status != null;
         LoggerHelpers.traceLeave(log, "exists", traceId, streamSegmentName, exists);
         return exists;
     }
 
-    /**
-     * If the file exists, it is sealed :)
-     */
-    private boolean isSealed(Path path) throws FileNameFormatException {
-        try {
-            return this.fileSystem.exists(path);
-        } catch (IOException e) {
-            HDFSExceptionHelpers.convertException(path.getName(), e);
-            return false;
-        }
+    private boolean isSealed(FileStatus path) throws FileNameFormatException {
+        return path != null;
     }
 
     FileSystem openFileSystem(Configuration conf) throws IOException {
@@ -241,29 +248,25 @@ class NoAppendHDFSStorage implements SyncStorage {
     public void seal(SegmentHandle handle) throws StreamSegmentException {
         ensureInitializedAndNotClosed();
         long traceId = LoggerHelpers.traceEnter(log, "seal", handle);
-        if (!exists(handle.getSegmentName())) {
-            throw new StreamSegmentNotExistsException(handle.getSegmentName());
+        handle = asWritableHandle(handle);
+        try {
+            FileStatus status = findStatusForSegment(handle.getSegmentName(), true);
+        } catch (IOException e) {
+            throw HDFSExceptionHelpers.convertException(handle.getSegmentName(), e);
         }
         LoggerHelpers.traceLeave(log, "seal", traceId, handle);
     }
 
     @Override
     public void unseal(SegmentHandle handle) throws StreamSegmentException {
-        ensureInitializedAndNotClosed();
-        long traceId = LoggerHelpers.traceEnter(log, "seal", handle);
-        try {
-            FileStatus status = findStatusForSegment(handle.getSegmentName(), true);
-            makeWrite(status);
-            this.fileSystem.rename(status.getPath(), getFilePath(handle.getSegmentName(), this.epoch));
-        } catch (IOException e) {
-            throw HDFSExceptionHelpers.convertException(handle.getSegmentName(), e);
-        }
-        LoggerHelpers.traceLeave(log, "unseal", traceId, handle);
+        throw new NotImplementedException("unseal");
     }
 
     @Override
     public void concat(SegmentHandle target, long offset, String sourceSegment) throws StreamSegmentException {
-        ensureInitializedAndNotClosed();
+        throw new NotImplementedException("concat");
+        /*
+         ensureInitializedAndNotClosed();
         long traceId = LoggerHelpers.traceEnter(log, "concat", target, offset, sourceSegment);
 
         target = asWritableHandle(target);
@@ -272,7 +275,11 @@ class NoAppendHDFSStorage implements SyncStorage {
         try {
             fileStatus = findStatusForSegment(target.getSegmentName(), true);
 
-           if (fileStatus.getLen() != offset) {
+            if (isSealed(fileStatus)) {
+                throw new StreamSegmentSealedException(target.getSegmentName());
+            } else if (getEpoch(fileStatus) > this.epoch) {
+                throw new StorageNotPrimaryException(target.getSegmentName());
+            } else if (fileStatus.getLen() != offset) {
                 throw new BadOffsetException(target.getSegmentName(), fileStatus.getLen(), offset);
             }
 
@@ -286,29 +293,41 @@ class NoAppendHDFSStorage implements SyncStorage {
             throw HDFSExceptionHelpers.convertException(sourceSegment, ex);
         }
         LoggerHelpers.traceLeave(log, "concat", traceId, target, offset, sourceSegment);
+        */
     }
 
-    /**
-     * Delete is re-entrant too :)
-     * @param handle A read-write SegmentHandle that points to a Segment to Delete.
-     * @throws StreamSegmentException
-     */
     @Override
     public void delete(SegmentHandle handle) throws StreamSegmentException {
         ensureInitializedAndNotClosed();
         long traceId = LoggerHelpers.traceEnter(log, "delete", handle);
         handle = asWritableHandle(handle);
         try {
-            FileStatus statusForSegment = findStatusForSegment(handle.getSegmentName(), false);
-            if (statusForSegment != null) {
-                this.fileSystem.delete(statusForSegment.getPath(), true);
-            }
+            FileStatus[] statusForSegment = findAllStatusForSegment(handle.getSegmentName(), true);
+
+            Arrays.stream(statusForSegment).forEach( (status) -> {
+                try {
+                    this.fileSystem.delete(status.getPath(), true);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            });
         } catch (IOException e) {
             throw HDFSExceptionHelpers.convertException(handle.getSegmentName(), e);
         }
         LoggerHelpers.traceLeave(log, "delete", traceId, handle);
     }
 
+    private FileStatus[] findAllStatusForSegment(String segmentName, boolean enforceExistence) throws IOException {
+        FileStatus[] rawFiles = findAllRaw(segmentName);
+        if (rawFiles == null || rawFiles.length == 0) {
+            if (enforceExistence) {
+                throw HDFSExceptionHelpers.segmentNotExistsException(segmentName);
+            }
+
+            return null;
+        }
+        return rawFiles;
+    }
 
     @Override
     public void truncate(SegmentHandle handle, long offset) {
@@ -328,21 +347,18 @@ class NoAppendHDFSStorage implements SyncStorage {
         ensureInitializedAndNotClosed();
         long traceId = LoggerHelpers.traceEnter(log, "write", handle, offset, length);
         handle = asWritableHandle(handle);
-
         FileStatus status = null;
-
         try {
-            status = findStatusForSegment(handle.getSegmentName(), false);
-            if (status != null && isSealed(status.getPath())) {
+            status = findStatusForSegment(handle.getSegmentName(), true);
+            if (isSealed(status)) {
                 throw new StreamSegmentSealedException(handle.getSegmentName());
             }
-
         } catch (IOException e) {
             throw HDFSExceptionHelpers.convertException(handle.getSegmentName(), e);
         }
 
         Timer timer = new Timer();
-        try (FSDataOutputStream stream = this.fileSystem.create(new Path(getPathPrefix(handle.getSegmentName())))) {
+        try (FSDataOutputStream stream = this.fileSystem.create(getFilePath(handle.getSegmentName(), 0))) {
 
             if (length == 0) {
                 // Exit here (vs at the beginning of the method), since we want to throw appropriate exceptions in case
@@ -367,44 +383,33 @@ class NoAppendHDFSStorage implements SyncStorage {
         LoggerHelpers.traceLeave(log, "write", traceId, handle, offset, length);
     }
 
-    /**
-     * Openwrite is also reentrant. If the file exists, it is sealed. Otherwise it is available.
-     * @param streamSegmentName Name of the StreamSegment to be opened.
-     * @return
-     * @throws StreamSegmentException
-     */
     @Override
     public SegmentHandle openWrite(String streamSegmentName) throws StreamSegmentException {
         ensureInitializedAndNotClosed();
         long traceId = LoggerHelpers.traceEnter(log, "openWrite", streamSegmentName);
         long fencedCount = 0;
-
         try {
-            FileStatus fileStatus = findStatusForSegment(streamSegmentName, false);
-
-            if (fileStatus == null) {
-                return HDFSSegmentHandle.write(streamSegmentName);
-            }
+            FileStatus[] fileStatus = findAllStatusForSegment(streamSegmentName, true);
         } catch (IOException e) {
             throw HDFSExceptionHelpers.convertException(streamSegmentName, e);
         }
         // Looping for the maximum possible number.
-
         LoggerHelpers.traceLeave(log, "openWrite", traceId, epoch);
-        throw new StorageNotPrimaryException("Not able to fence out other writers.");
+        return HDFSSegmentHandle.write(streamSegmentName);
     }
 
     @Override
     public SegmentProperties create(String streamSegmentName) throws StreamSegmentException {
-        // This is a NO-OP. File is created during the write. This just checks whether the file exists,
-        // If it does, and throws SegmentExistsException.
+        // Creates a meta file representing this segment.
+        //The actual file will be created during write.
+        // This is just to ensure that the existence of segment is confirmed.
 
         ensureInitializedAndNotClosed();
         long traceId = LoggerHelpers.traceEnter(log, "create", streamSegmentName);
         // Create the segment using our own epoch.
         FileStatus[] status = null;
         try {
-            status = findFileRaw(streamSegmentName);
+            status = findAllRaw(streamSegmentName);
         } catch (IOException e) {
             throw HDFSExceptionHelpers.convertException(streamSegmentName, e);
         }
@@ -413,8 +418,25 @@ class NoAppendHDFSStorage implements SyncStorage {
             throw HDFSExceptionHelpers.convertException(streamSegmentName, HDFSExceptionHelpers.segmentExistsException(streamSegmentName));
         }
 
+        // Create the file for the segment with epoch 0.
+        Path fullPath = getMetaFilePath(streamSegmentName);
+        try {
+            // Create the file, and then immediately close the returned OutputStream, so that HDFS may properly create the file.
+            this.fileSystem.create(fullPath, READWRITE_PERMISSION, false, 0, this.config.getReplication(),
+                    this.config.getBlockSize(), null).close();
+            log.debug("Created '{}'.", fullPath);
+        } catch (IOException e) {
+            throw HDFSExceptionHelpers.convertException(streamSegmentName, e);
+        }
+
         LoggerHelpers.traceLeave(log, "create", traceId, streamSegmentName);
         return StreamSegmentInformation.builder().name(streamSegmentName).build();
+    }
+
+    private Path getMetaFilePath(String segmentName) {
+        Preconditions.checkState(segmentName != null && segmentName.length() > 0, "segmentName must be non-null and non-empty");
+        return new Path(String.format(NAME_FORMAT, getPathPrefix(segmentName), META));
+
     }
     //endregion
 
@@ -449,14 +471,15 @@ class NoAppendHDFSStorage implements SyncStorage {
      * Gets an array (not necessarily ordered) of FileStatus objects currently available for the given Segment.
      * These must be in the format specified by NAME_FORMAT (see EXAMPLE_NAME_FORMAT).
      */
-    private FileStatus[] findFileRaw(String segmentName) throws IOException {
+    private FileStatus[] findAllRaw(String segmentName) throws IOException {
         assert segmentName != null && segmentName.length() > 0 : "segmentName must be non-null and non-empty";
         String pattern = String.format(NAME_FORMAT, getPathPrefix(segmentName), SUFFIX_GLOB_REGEX);
         FileStatus[] files = this.fileSystem.globStatus(new Path(pattern));
 
-        if (files != null && files.length > 1) {
+        /* Two files may exist ...
+        if (files.length > 1) {
             throw new IllegalArgumentException("More than one file");
-        }
+        }*/
         return files;
     }
 
@@ -494,7 +517,7 @@ class NoAppendHDFSStorage implements SyncStorage {
      * @throws IOException If an exception occurred.
      */
     private FileStatus findStatusForSegment(String segmentName, boolean enforceExistence) throws IOException {
-        FileStatus[] rawFiles = findFileRaw(segmentName);
+        FileStatus[] rawFiles = findAllRaw(segmentName);
         if (rawFiles == null || rawFiles.length == 0) {
             if (enforceExistence) {
                 throw HDFSExceptionHelpers.segmentNotExistsException(segmentName);
@@ -504,9 +527,10 @@ class NoAppendHDFSStorage implements SyncStorage {
         }
 
         val result = Arrays.stream(rawFiles)
+                           .filter(status -> !status.getPath().getName().endsWith(META))
                            .sorted(this::compareFileStatus)
                            .collect(Collectors.toList());
-        return result.get(result.size() -1);
+        return (result == null || result.size() == 0) ? null : result.get(result.size() -1);
     }
 
     private int compareFileStatus(FileStatus f1, FileStatus f2) {

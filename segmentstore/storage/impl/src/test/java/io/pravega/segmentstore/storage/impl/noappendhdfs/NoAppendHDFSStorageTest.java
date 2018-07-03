@@ -18,6 +18,7 @@ import io.pravega.segmentstore.contracts.StreamSegmentNotExistsException;
 import io.pravega.segmentstore.contracts.StreamSegmentSealedException;
 import io.pravega.segmentstore.storage.AsyncStorageWrapper;
 import io.pravega.segmentstore.storage.SegmentHandle;
+import io.pravega.segmentstore.storage.SegmentRollingPolicy;
 import io.pravega.segmentstore.storage.Storage;
 import io.pravega.segmentstore.storage.StorageNotPrimaryException;
 import io.pravega.segmentstore.storage.StorageTestBase;
@@ -380,6 +381,7 @@ public class NoAppendHDFSStorageTest extends StorageTestBase {
 
         @Before
         public void setUp() throws Exception {
+            this.rollingStrategy = SegmentRollingPolicy.ALWAYS_ROLLING;
             this.baseDir = Files.createTempDirectory("test_hdfs").toFile().getAbsoluteFile();
             this.hdfsCluster = HDFSClusterHelpers.createMiniDFSCluster(this.baseDir.getAbsolutePath());
             this.adapterConfig = HDFSStorageConfig
@@ -407,7 +409,7 @@ public class NoAppendHDFSStorageTest extends StorageTestBase {
         @Override
         protected long getSegmentRollingSize() {
             // Need to increase this otherwise the test will run for too long.
-            return DEFAULT_ROLLING_SIZE * 5;
+            return SegmentRollingPolicy.ALWAYS_ROLLING.getMaxLength();
         }
     }
 

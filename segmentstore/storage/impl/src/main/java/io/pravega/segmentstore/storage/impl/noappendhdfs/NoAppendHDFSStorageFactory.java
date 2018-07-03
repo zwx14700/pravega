@@ -15,7 +15,7 @@ import io.pravega.segmentstore.storage.SegmentRollingPolicy;
 import io.pravega.segmentstore.storage.Storage;
 import io.pravega.segmentstore.storage.StorageFactory;
 import io.pravega.segmentstore.storage.impl.hdfs.HDFSStorageConfig;
-import io.pravega.segmentstore.storage.rolling.RollingStorage;
+import io.pravega.segmentstore.storage.rolling.NoAppendRollingStorage;
 import java.util.concurrent.Executor;
 
 /**
@@ -41,6 +41,6 @@ public class NoAppendHDFSStorageFactory implements StorageFactory {
     @Override
     public Storage createStorageAdapter() {
         NoAppendHDFSStorage s = new NoAppendHDFSStorage(this.config);
-        return new AsyncStorageWrapper(new RollingStorage(s, SegmentRollingPolicy.ALWAYS_ROLLING), this.executor);
+        return new AsyncStorageWrapper(new NoAppendRollingStorage(s, SegmentRollingPolicy.ALWAYS_ROLLING), this.executor);
     }
 }

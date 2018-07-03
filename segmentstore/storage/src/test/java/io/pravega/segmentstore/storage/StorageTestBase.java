@@ -13,6 +13,7 @@ import io.pravega.common.MathHelpers;
 import io.pravega.common.hash.RandomFactory;
 import io.pravega.segmentstore.contracts.BadOffsetException;
 import io.pravega.segmentstore.contracts.SegmentProperties;
+import io.pravega.segmentstore.contracts.StreamSegmentExistsException;
 import io.pravega.segmentstore.contracts.StreamSegmentNotExistsException;
 import io.pravega.segmentstore.contracts.StreamSegmentSealedException;
 import io.pravega.test.common.AssertExtensions;
@@ -63,11 +64,9 @@ public abstract class StorageTestBase extends ThreadPooledTestSuite {
             s.initialize(DEFAULT_EPOCH);
             createSegment(segmentName, s);
             Assert.assertTrue("Expected the segment to exist.", s.exists(segmentName, null).join());
-            /* Create is re-entrant as it is NO-OP
             assertThrows("create() did not throw for existing StreamSegment.",
                     () -> createSegment(segmentName, s),
                     ex -> ex instanceof StreamSegmentExistsException);
-             */
 
             // Delete and make sure it can be recreated.
             s.openWrite(segmentName).thenCompose(handle -> s.delete(handle, null)).join();
@@ -88,13 +87,10 @@ public abstract class StorageTestBase extends ThreadPooledTestSuite {
 
             //Delete the segment.
             s.openWrite(segmentName).thenCompose(handle -> s.delete(handle, null)).join();
-            /**
-             * REentrant delete, exists will still return true.
             Assert.assertFalse("Expected the segment to not exist.", s.exists(segmentName, null).join());
             assertThrows("getStreamSegmentInfo() did not throw for deleted StreamSegment.",
                     () -> s.getStreamSegmentInfo(segmentName, null).join(),
                     ex -> ex instanceof StreamSegmentNotExistsException);
-             */
         }
     }
 
