@@ -11,7 +11,6 @@ package io.pravega.shared.segment;
 
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
-
 import java.util.LinkedList;
 import java.util.List;
 import java.util.UUID;
@@ -192,6 +191,16 @@ public final class StreamSegmentNameUtils {
     public static String getSegmentChunkName(String segmentName, long offset) {
         Preconditions.checkArgument(!segmentName.contains(OFFSET_SUFFIX), "segmentName is already a SegmentChunk name");
         return segmentName + OFFSET_SUFFIX + Long.toString(offset);
+    }
+
+    /**
+     * Gets the name of the SegmentChunk for the given Segment and Offset.
+     *
+     * @param segmentName The name of the Segment to get the SegmentChunk name for.
+     * @return The SegmentChunk offset.
+     */
+    public static long parseSegmentChunkName(String segmentName) {
+        return  Long.parseLong(segmentName.substring(segmentName.lastIndexOf(OFFSET_SUFFIX)));
     }
 
     /**

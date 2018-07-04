@@ -19,8 +19,8 @@ import io.pravega.segmentstore.contracts.SegmentProperties;
 import io.pravega.segmentstore.contracts.StreamSegmentException;
 import io.pravega.segmentstore.contracts.StreamSegmentInformation;
 import io.pravega.segmentstore.contracts.StreamSegmentSealedException;
+import io.pravega.segmentstore.storage.NoAppendSyncStorage;
 import io.pravega.segmentstore.storage.SegmentHandle;
-import io.pravega.segmentstore.storage.SyncStorage;
 import io.pravega.segmentstore.storage.impl.hdfs.FileNameFormatException;
 import io.pravega.segmentstore.storage.impl.hdfs.HDFSExceptionHelpers;
 import io.pravega.segmentstore.storage.impl.hdfs.HDFSMetrics;
@@ -30,6 +30,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import lombok.SneakyThrows;
@@ -69,7 +70,7 @@ import org.apache.hadoop.io.IOUtils;
  * <p>
  */
 @Slf4j
-class NoAppendHDFSStorage implements SyncStorage {
+class NoAppendHDFSStorage implements NoAppendSyncStorage {
     private static final String PART_SEPARATOR = "_";
     private static final String NAME_FORMAT = "%s" + PART_SEPARATOR + "%s";
     private static final String SEALED = "sealed";
@@ -606,6 +607,20 @@ class NoAppendHDFSStorage implements SyncStorage {
             stream.readFully(offset, buffer, bufferOffset, length);
         }
         return length;
+    }
+
+    @Override
+    public List<String> list(String segmentName) {
+        try {
+            return  Arrays.stream(findAllRaw(segmentName))
+                          .map(fileStatus -> {
+                              return fileStatus.getPath().toString().substring(getPathPrefix(segmentName).length());
+                          })
+                    .collect(Collectors.toList());
+        } catch (IOException e) {
+            HDFSExceptionHelpers.convertException(segmentName, e);
+        }
+        return null;
     }
 
     //endregion

@@ -23,12 +23,12 @@ import io.pravega.segmentstore.contracts.StreamSegmentNotExistsException;
 import io.pravega.segmentstore.contracts.StreamSegmentSealedException;
 import io.pravega.segmentstore.contracts.StreamSegmentTruncatedException;
 import io.pravega.segmentstore.contracts.StreamingException;
+import io.pravega.segmentstore.storage.NoAppendSyncStorage;
 import io.pravega.segmentstore.storage.SegmentHandle;
 import io.pravega.segmentstore.storage.SegmentRollingPolicy;
 import io.pravega.segmentstore.storage.StorageNotPrimaryException;
 import io.pravega.segmentstore.storage.SyncStorage;
 import io.pravega.shared.segment.StreamSegmentNameUtils;
-import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.util.Collections;
 import java.util.List;
@@ -65,9 +65,11 @@ import lombok.val;
  */
 @Slf4j
 public class NoAppendRollingStorage implements SyncStorage {
+    private static final String SEALED_FLAG = "Sealed";
+    private static final String CONCAT_FLAG = "Concat";
     //region Members
 
-    private final SyncStorage baseStorage;
+    private final NoAppendSyncStorage baseStorage;
     private final SegmentRollingPolicy defaultRollingPolicy;
     private final AtomicBoolean closed;
 
@@ -80,8 +82,8 @@ public class NoAppendRollingStorage implements SyncStorage {
      *
      * @param baseStorage          A SyncStorage that will be used to execute operations.
      */
-    public NoAppendRollingStorage(SyncStorage baseStorage) {
-        this(baseStorage, SegmentRollingPolicy.NO_ROLLING);
+    public NoAppendRollingStorage(NoAppendSyncStorage baseStorage) {
+        this(baseStorage, SegmentRollingPolicy.ALWAYS_ROLLING);
     }
 
     /**
@@ -91,7 +93,7 @@ public class NoAppendRollingStorage implements SyncStorage {
      * @param defaultRollingPolicy A SegmentRollingPolicy to apply to every StreamSegment that does not have its own policy
      *                             defined.
      */
-    public NoAppendRollingStorage(SyncStorage baseStorage, SegmentRollingPolicy defaultRollingPolicy) {
+    public NoAppendRollingStorage(NoAppendSyncStorage baseStorage, SegmentRollingPolicy defaultRollingPolicy) {
         this.baseStorage = Preconditions.checkNotNull(baseStorage, "baseStorage");
         this.defaultRollingPolicy = Preconditions.checkNotNull(defaultRollingPolicy, "defaultRollingPolicy");
         this.closed = new AtomicBoolean();
@@ -568,7 +570,7 @@ public class NoAppendRollingStorage implements SyncStorage {
             checkIfEmptyAndNotSealed(ex, newSegmentChunk.getName());
         }
 
-        serializeNewChunk(handle, newSegmentChunk);
+        //serializeNewChunk(handle, newSegmentChunk);
         val activeHandle = this.baseStorage.openWrite(newSegmentChunk.getName());
         handle.addChunk(newSegmentChunk, activeHandle);
         log.debug("Created new SegmentChunk '{}' for '{}'.", newSegmentChunk, handle);
@@ -695,11 +697,24 @@ public class NoAppendRollingStorage implements SyncStorage {
     private RollingSegmentHandle readHeader(SegmentProperties headerInfo, SegmentHandle headerHandle) throws StreamSegmentException {
         byte[] readBuffer = new byte[(int) headerInfo.getLength()];
         //TODO: Read chunks one by one instead of reading from the header..
+        
         this.baseStorage.read(headerHandle, 0, readBuffer, 0, readBuffer.length);
         RollingSegmentHandle handle = HandleSerializer.deserialize(readBuffer, headerHandle);
-        if (headerInfo.isSealed()) {
+        List<String> chunks = this.baseStorage.list(headerHandle.getSegmentName());
+        if (chunks.contains(SEALED_FLAG)) {
             handle.markSealed();
         }
+
+        //Commit chunks
+        chunks.stream()
+              .filter(name -> name.startsWith(CONCAT_FLAG))
+              .collect(Collectors.toMap(key -> {
+                  return key.substring(CONCAT_FLAG.length());
+                  },
+                      value -> {
+                  return null;
+              }
+              ));
 
         return handle;
     }
@@ -716,15 +731,18 @@ public class NoAppendRollingStorage implements SyncStorage {
         }
     }
 
+    /* No need to serialize. The filename is enough...
     private void serializeNewChunk(RollingSegmentHandle handle, SegmentChunk newSegmentChunk) throws StreamSegmentException {
         updateHandle(handle, HandleSerializer.serializeChunk(newSegmentChunk));
-    }
+    }*/
 
     private void serializeBeginConcat(RollingSegmentHandle targetHandle, RollingSegmentHandle sourceHandle) throws StreamSegmentException {
-        byte[] updateData = HandleSerializer.serializeConcat(sourceHandle.chunks().size(), targetHandle.length());
-        updateHandle(targetHandle, updateData);
+        //TODO: Create a concat segment ...
+    /*    byte[] updateData = HandleSerializer.serializeConcat(sourceHandle.chunks().size(), targetHandle.length());
+      updateHandle(targetHandle, updateData);*/
     }
 
+    /*
     private void updateHandle(RollingSegmentHandle handle, byte[] data) throws StreamSegmentException {
         try {
             this.baseStorage.write(handle.getHeaderHandle(), handle.getHeaderLength(), new ByteArrayInputStream(data), data.length);
@@ -735,7 +753,7 @@ public class NoAppendRollingStorage implements SyncStorage {
             throw new StorageNotPrimaryException(handle.getSegmentName(), ex);
         }
     }
-
+    */
     //endregion
 
     //region Helpers
