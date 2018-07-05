@@ -218,15 +218,9 @@ public class NoAppendRollingStorage implements SyncStorage {
     }
 
     @Override
-    @SneakyThrows(StreamSegmentException.class)
     public boolean exists(String segmentName) {
-        try {
-            // Try to open-read the segment, this checks both the header file and the existence of the last SegmentChunk.
-            openRead(segmentName);
-            return true;
-        } catch (StreamSegmentNotExistsException ex) {
-            return false;
-        }
+            // Try to check whether the header file exists.
+            return this.baseStorage.exists(StreamSegmentNameUtils.getHeaderSegmentName(segmentName));
     }
 
     //endregion
@@ -303,9 +297,13 @@ public class NoAppendRollingStorage implements SyncStorage {
 
     @Override
     public void write(SegmentHandle handle, long offset, InputStream data, int length) throws StreamSegmentException {
+
         val h = asWritableHandle(handle);
         ensureNotDeleted(h);
         ensureNotSealed(h);
+        if (!exists(handle.getSegmentName())) {
+            throw new StreamSegmentNotExistsException(handle.getSegmentName());
+        }
         ensureOffset(h, offset);
         long traceId = LoggerHelpers.traceEnter(log, "write", handle, offset, length);
 
@@ -650,7 +648,7 @@ public class NoAppendRollingStorage implements SyncStorage {
             val headerHandle = readOnly
                     ? this.baseStorage.openRead(headerInfo.getName())
                     : this.baseStorage.openWrite(headerInfo.getName());
-            handle = readHeader(headerInfo, headerHandle);
+            handle = readHeaderAndChunks(headerInfo, headerHandle, segmentName);
         } catch (StreamSegmentNotExistsException ex) {
             // Header does not exist. Attempt to open Segment directly.
             val segmentHandle = readOnly ? this.baseStorage.openRead(segmentName) : this.baseStorage.openWrite(segmentName);
@@ -694,13 +692,13 @@ public class NoAppendRollingStorage implements SyncStorage {
         return headerInfo;
     }
 
-    private RollingSegmentHandle readHeader(SegmentProperties headerInfo, SegmentHandle headerHandle) throws StreamSegmentException {
+    private RollingSegmentHandle readHeaderAndChunks(SegmentProperties headerInfo, SegmentHandle headerHandle, String segmentName) throws StreamSegmentException {
         byte[] readBuffer = new byte[(int) headerInfo.getLength()];
         //TODO: Read chunks one by one instead of reading from the header..
         
         this.baseStorage.read(headerHandle, 0, readBuffer, 0, readBuffer.length);
         RollingSegmentHandle handle = HandleSerializer.deserialize(readBuffer, headerHandle);
-        List<String> chunks = this.baseStorage.list(headerHandle.getSegmentName());
+        List<String> chunks = this.baseStorage.list(segmentName);
         if (chunks.contains(SEALED_FLAG)) {
             handle.markSealed();
         }
@@ -715,7 +713,16 @@ public class NoAppendRollingStorage implements SyncStorage {
                   return null;
               }
               ));
-
+        //Segment chunks
+        chunks.stream()
+              .filter(name -> name.startsWith(CONCAT_FLAG))
+              .collect(Collectors.toMap(key -> {
+                          return key.substring(CONCAT_FLAG.length());
+                      },
+                      value -> {
+                          return null;
+                      }
+              ));
         return handle;
     }
 
@@ -815,15 +822,7 @@ public class NoAppendRollingStorage implements SyncStorage {
 
     private void ensureOffset(RollingSegmentHandle handle, long offset) throws StreamSegmentException {
         if (offset != handle.length()) {
-            // Force-refresh the handle to make sure it is still in sync with reality. Make sure we open a read handle
-            // so that we don't force any sort of fencing during this process.
-            val refreshedHandle = openHandle(handle.getSegmentName(), true);
-            handle.refresh(refreshedHandle);
-            log.debug("Handle refreshed: {}.", handle);
-            if (offset != handle.length()) {
-                // Still in disagreement; throw exception.
                 throw new BadOffsetException(handle.getSegmentName(), handle.length(), offset);
-            }
         }
     }
 
