@@ -194,6 +194,17 @@ public final class StreamSegmentNameUtils {
     }
 
     /**
+     * Gets the pattern for segment chunk name representing data
+     * @param segmentName The name of the segment for which prefixes need to be found.
+     * @return The prefix which represents all the segment chunk.
+     */
+    public static String getSegmentChunkNamePrefix(String segmentName) {
+        Preconditions.checkArgument(!segmentName.contains(OFFSET_SUFFIX), "segmentName is already a SegmentChunk name");
+        return segmentName + OFFSET_SUFFIX + "{[0-9]*}";
+
+    }
+
+    /**
      * Gets the name of the SegmentChunk for the given Segment and Offset.
      *
      * @param segmentName The name of the Segment to get the SegmentChunk name for.

@@ -698,31 +698,20 @@ public class NoAppendRollingStorage implements SyncStorage {
         
         this.baseStorage.read(headerHandle, 0, readBuffer, 0, readBuffer.length);
         RollingSegmentHandle handle = HandleSerializer.deserialize(readBuffer, headerHandle);
-        List<String> chunks = this.baseStorage.list(segmentName);
+        String chunkNamePrefix = StreamSegmentNameUtils.getSegmentChunkNamePrefix(segmentName);
+        List<String> chunks = this.baseStorage.list(chunkNamePrefix);
+        //TODO: Take care of commit and SEALED fileschunks.add(this.baseStorage.list();
+
         if (chunks.contains(SEALED_FLAG)) {
             handle.markSealed();
         }
 
         //Commit chunks
-        chunks.stream()
-              .filter(name -> name.startsWith(CONCAT_FLAG))
-              .collect(Collectors.toMap(key -> {
-                  return key.substring(CONCAT_FLAG.length());
-                  },
-                      value -> {
-                  return null;
-              }
-              ));
-        //Segment chunks
-        chunks.stream()
-              .filter(name -> name.startsWith(CONCAT_FLAG))
-              .collect(Collectors.toMap(key -> {
-                          return key.substring(CONCAT_FLAG.length());
-                      },
-                      value -> {
-                          return null;
-                      }
-              ));
+        handle.addChunks(
+        chunks.stream().map(name -> {
+            return new SegmentChunk(name, Integer.parseInt(name.substring(chunkNamePrefix.lastIndexOf(".") + 1)));
+        }).collect(Collectors.toList()).sort(chunk -> ););
+
         return handle;
     }
 
