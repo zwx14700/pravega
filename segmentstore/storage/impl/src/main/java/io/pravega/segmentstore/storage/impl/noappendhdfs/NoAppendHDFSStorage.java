@@ -613,6 +613,7 @@ class NoAppendHDFSStorage implements NoAppendSyncStorage {
     public List<String> list(String segmentName) {
         try {
             return  Arrays.stream(findAllRaw(segmentName))
+                          .filter(fileStatus -> fileStatus.getPath().getName().endsWith(META))
                           .map(fileStatus -> {
                               String name = fileStatus.getPath().getName();
                               return name.substring(0, name.lastIndexOf("_"));

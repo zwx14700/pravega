@@ -707,10 +707,15 @@ public class NoAppendRollingStorage implements SyncStorage {
         }
 
         //Commit chunks
-        handle.addChunks(
-        chunks.stream().map(name -> {
+        List<SegmentChunk> chunkList = chunks.stream().map(name -> {
             return new SegmentChunk(name, Integer.parseInt(name.substring(chunkNamePrefix.lastIndexOf(".") + 1)));
-        }).collect(Collectors.toList()).sort(chunk -> ););
+        }).collect(Collectors.toList());
+
+        chunkList.sort((c1, c2) -> {
+            return (int) (c1.getStartOffset() - c2.getStartOffset());
+        });
+
+        handle.addChunks(chunkList);
 
         return handle;
     }
