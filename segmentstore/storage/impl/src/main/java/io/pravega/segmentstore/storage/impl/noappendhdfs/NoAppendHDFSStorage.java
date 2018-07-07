@@ -185,7 +185,7 @@ class NoAppendHDFSStorage implements NoAppendSyncStorage {
         long traceId = LoggerHelpers.traceEnter(log, "exists", streamSegmentName);
         FileStatus status = null;
         try {
-            status = findStatusForSegment(streamSegmentName, false);
+            status = findMetaForSegment(streamSegmentName);
         } catch (IOException e) {
             // HDFS could not find the file. Returning false.
             log.warn("Got exception checking if file exists", e);
@@ -193,6 +193,17 @@ class NoAppendHDFSStorage implements NoAppendSyncStorage {
         boolean exists = status != null;
         LoggerHelpers.traceLeave(log, "exists", traceId, streamSegmentName, exists);
         return exists;
+    }
+
+    private FileStatus findMetaForSegment(String segmentName) throws IOException {
+        FileStatus[] rawFiles = findAllRaw(segmentName);
+        if (rawFiles == null || rawFiles.length == 0) {
+            return null;
+        }
+
+        val result = Arrays.stream(rawFiles)
+                           .collect(Collectors.toList());
+        return (result == null || result.size() == 0) ? null : result.get(result.size() -1);
     }
 
     private boolean isSealed(FileStatus path) throws FileNameFormatException {
@@ -252,6 +263,7 @@ class NoAppendHDFSStorage implements NoAppendSyncStorage {
         handle = asWritableHandle(handle);
         try {
             FileStatus status = findStatusForSegment(handle.getSegmentName(), true);
+
         } catch (IOException e) {
             throw HDFSExceptionHelpers.convertException(handle.getSegmentName(), e);
         }

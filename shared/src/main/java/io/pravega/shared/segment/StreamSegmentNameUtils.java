@@ -20,7 +20,15 @@ import java.util.UUID;
  */
 public final class StreamSegmentNameUtils {
     //region Members
+    /**
+     * This suffix denotes that a rolling storage segment is sealed.
+     */
+    public static final String SEALED_FLAG = "$Sealed";
 
+    /**
+     * This prefix denotes that a base storage contains details about concat with other rolling storage.
+     */
+    private static final String CONCAT_FLAG = "Concat";
     /**
      * This is appended to the end of the Segment/Transaction name to indicate it stores its State.
      */
@@ -194,13 +202,13 @@ public final class StreamSegmentNameUtils {
     }
 
     /**
-     * Gets the pattern for segment chunk name representing data
+     * Gets the pattern for segment chunk name representing data.
      * @param segmentName The name of the segment for which prefixes need to be found.
      * @return The prefix which represents all the segment chunk.
      */
     public static String getSegmentChunkNamePrefix(String segmentName) {
         Preconditions.checkArgument(!segmentName.contains(OFFSET_SUFFIX), "segmentName is already a SegmentChunk name");
-        return segmentName + OFFSET_SUFFIX + "{[0-9]*}";
+        return segmentName + "{" +OFFSET_SUFFIX + "[0-9]*," + SEALED_FLAG + "}";
 
     }
 
@@ -322,5 +330,14 @@ public final class StreamSegmentNameUtils {
         }
         sb.append(streamName);
         return sb;
+    }
+
+    /**
+     * Returns name of the base segment that represents whether this segment is sealed.
+     * @param segmentName Name of the Rolling segment.
+     * @return Name of the base segment.
+     */
+    public static String getSealedNameFor(String segmentName) {
+        return segmentName + SEALED_FLAG;
     }
 }

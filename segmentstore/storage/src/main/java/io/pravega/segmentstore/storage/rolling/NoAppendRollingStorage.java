@@ -65,8 +65,7 @@ import lombok.val;
  */
 @Slf4j
 public class NoAppendRollingStorage implements SyncStorage {
-    private static final String SEALED_FLAG = "Sealed";
-    private static final String CONCAT_FLAG = "Concat";
+
     //region Members
 
     private final NoAppendSyncStorage baseStorage;
@@ -338,11 +337,7 @@ public class NoAppendRollingStorage implements SyncStorage {
         ensureNotDeleted(h);
         long traceId = LoggerHelpers.traceEnter(log, "seal", handle);
         sealActiveChunk(h);
-        SegmentHandle headerHandle = h.getHeaderHandle();
-        if (headerHandle != null) {
-            this.baseStorage.seal(headerHandle);
-        }
-
+        this.baseStorage.create(StreamSegmentNameUtils.getSealedNameFor(h.getSegmentName()));
         h.markSealed();
         log.debug("Sealed Header for '{}'.", h.getSegmentName());
         LoggerHelpers.traceLeave(log, "seal", traceId, handle);
@@ -356,6 +351,9 @@ public class NoAppendRollingStorage implements SyncStorage {
     @Override
     public void concat(SegmentHandle targetHandle, long targetOffset, String sourceSegment) throws StreamSegmentException {
         val target = asWritableHandle(targetHandle);
+        if (!exists(targetHandle.getSegmentName())) {
+            throw new StreamSegmentNotExistsException(targetHandle.getSegmentName());
+        }
         ensureOffset(target, targetOffset);
         ensureNotDeleted(target);
         ensureNotSealed(target);
@@ -410,9 +408,9 @@ public class NoAppendRollingStorage implements SyncStorage {
 
             List<SegmentChunk> newSegmentChunks = rebase(source.chunks(), target.length());
             sealActiveChunk(target);
-            serializeBeginConcat(target, source);
-            this.baseStorage.concat(target.getHeaderHandle(), target.getHeaderLength(), source.getHeaderHandle().getSegmentName());
-            target.increaseHeaderLength(source.getHeaderLength());
+            serializeConcatHeader(target, source);
+            // this.baseStorage.concat(target.getHeaderHandle(), target.getHeaderLength(), source.getHeaderHandle().getSegmentName());
+            // target.increaseHeaderLength(source.getHeaderLength());
             target.addChunks(newSegmentChunks);
 
             // After we do a header merge, it's possible that the (new) last chunk may still have space to write to.
@@ -655,29 +653,6 @@ public class NoAppendRollingStorage implements SyncStorage {
             handle = new RollingSegmentHandle(segmentHandle);
         }
 
-        // Update each SegmentChunk's Length (based on offset difference) and mark them as Sealed.
-        SegmentChunk last = null;
-        for (SegmentChunk s : handle.chunks()) {
-            if (last != null) {
-                last.setLength(s.getStartOffset() - last.getStartOffset());
-                last.markSealed();
-            }
-
-            last = s;
-        }
-
-        // For the last one, we need to actually check the file and update its info.
-        if (last != null) {
-            val si = this.baseStorage.getStreamSegmentInfo(last.getName());
-            last.setLength(si.getLength());
-            if (si.isSealed()) {
-                last.markSealed();
-                if (handle.getHeaderHandle() == null) {
-                    handle.markSealed();
-                }
-            }
-        }
-
         return handle;
     }
 
@@ -694,29 +669,42 @@ public class NoAppendRollingStorage implements SyncStorage {
 
     private RollingSegmentHandle readHeaderAndChunks(SegmentProperties headerInfo, SegmentHandle headerHandle, String segmentName) throws StreamSegmentException {
         byte[] readBuffer = new byte[(int) headerInfo.getLength()];
-        //TODO: Read chunks one by one instead of reading from the header..
-        
+
         this.baseStorage.read(headerHandle, 0, readBuffer, 0, readBuffer.length);
         RollingSegmentHandle handle = HandleSerializer.deserialize(readBuffer, headerHandle);
         String chunkNamePrefix = StreamSegmentNameUtils.getSegmentChunkNamePrefix(segmentName);
         List<String> chunks = this.baseStorage.list(chunkNamePrefix);
-        //TODO: Take care of commit and SEALED fileschunks.add(this.baseStorage.list();
+        //TODO: Take care of commit segments
 
-        if (chunks.contains(SEALED_FLAG)) {
-            handle.markSealed();
-        }
-
-        //Commit chunks
-        List<SegmentChunk> chunkList = chunks.stream().map(name -> {
-            return new SegmentChunk(name, Integer.parseInt(name.substring(chunkNamePrefix.lastIndexOf(".") + 1)));
-        }).collect(Collectors.toList());
+        List<SegmentChunk> chunkList = chunks.stream()
+                                             .filter(name -> !name.equals(StreamSegmentNameUtils.getSealedNameFor(segmentName)))
+                                             .map(name -> {
+                                                 try {
+                                                     return new SegmentChunk(name, Integer.parseInt(name.substring(name.lastIndexOf(".") + 1)));
+                                                 } catch (Exception e) {
+                                                     e.printStackTrace();
+                                                 }
+                                                 return null;
+                                             })
+                                             .collect(Collectors.toList());
 
         chunkList.sort((c1, c2) -> {
             return (int) (c1.getStartOffset() - c2.getStartOffset());
         });
-
+        // Update each SegmentChunk's Length (based on offset difference) and mark them as Sealed.
+        SegmentChunk last = null;
+        for (SegmentChunk s: chunkList) {
+            if (last != null) {
+                last.setLength(s.getStartOffset() - last.getStartOffset());
+                last.markSealed();
+            }
+            last = s;
+        }
         handle.addChunks(chunkList);
 
+        if (chunks.contains(StreamSegmentNameUtils.getSealedNameFor(segmentName))) {
+            handle.markSealed();
+        }
         return handle;
     }
 
@@ -737,8 +725,12 @@ public class NoAppendRollingStorage implements SyncStorage {
         updateHandle(handle, HandleSerializer.serializeChunk(newSegmentChunk));
     }*/
 
-    private void serializeBeginConcat(RollingSegmentHandle targetHandle, RollingSegmentHandle sourceHandle) throws StreamSegmentException {
+    private void serializeConcatHeader(RollingSegmentHandle targetHandle, RollingSegmentHandle sourceHandle) throws StreamSegmentException {
         //TODO: Create a concat segment ...
+        //Create Concat header
+        //It a Concat header already exists either clean up or throw error.
+        //Write source name to the header
+
     /*    byte[] updateData = HandleSerializer.serializeConcat(sourceHandle.chunks().size(), targetHandle.length());
       updateHandle(targetHandle, updateData);*/
     }
