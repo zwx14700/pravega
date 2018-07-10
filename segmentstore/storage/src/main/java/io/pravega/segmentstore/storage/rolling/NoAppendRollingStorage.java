@@ -170,6 +170,7 @@ public class NoAppendRollingStorage implements SyncStorage {
                 checkTruncatedSegment(null, h, current);
                 if (current.getLength() == 0) {
                     // Empty SegmentChunk; don't bother trying to read from it.
+                    currentIndex++;
                     continue;
                 }
 
@@ -690,13 +691,15 @@ public class NoAppendRollingStorage implements SyncStorage {
                       //TODO: Throw silently
                       e.printStackTrace();
                   }
-                  chunkList.addAll(rebase(concatHandle.chunks(), Integer.parseInt(name.substring(name.lastIndexOf(".") + 1))));
+                  List<SegmentChunk> rebased = rebase(concatHandle.chunks(), Integer.parseInt(name.substring(name.lastIndexOf(".") + 1)));
+                  rebased.stream().forEach(segmentChunk -> segmentChunk.markUnsealed());
+                  chunkList.addAll(rebased);
               });
 
         //Add original chunks
         chunkList.addAll(chunks.stream()
                                              .filter(name -> !name.equals(StreamSegmentNameUtils.getSealedNameFor(segmentName)))
-                                             .filter(name -> StreamSegmentNameUtils.isConcatName(name))
+                                             .filter(name -> !StreamSegmentNameUtils.isConcatName(name))
                                              .map(name -> {
                                                  try {
                                                      return new SegmentChunk(name, Integer.parseInt(name.substring(name.lastIndexOf(".") + 1)));
@@ -750,7 +753,7 @@ public class NoAppendRollingStorage implements SyncStorage {
     }
 
     private void serializeConcatHeader(RollingSegmentHandle targetHandle, RollingSegmentHandle sourceHandle) throws StreamSegmentException {
-        String concatChunkName = StreamSegmentNameUtils.getconcatName(targetHandle.getSegmentName(), sourceHandle.length());
+        String concatChunkName = StreamSegmentNameUtils.getconcatName(targetHandle.getSegmentName(), targetHandle.length());
         this.baseStorage.create(concatChunkName);
         SegmentHandle concatHandle = this.baseStorage.openWrite(concatChunkName);
         this.baseStorage.write(concatHandle, 0, new ByteArrayInputStream(sourceHandle.getSegmentName().getBytes()), sourceHandle.getSegmentName().getBytes().length);
