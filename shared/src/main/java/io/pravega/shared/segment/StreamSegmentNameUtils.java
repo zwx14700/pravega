@@ -28,7 +28,7 @@ public final class StreamSegmentNameUtils {
     /**
      * This prefix denotes that a base storage contains details about concat with other rolling storage.
      */
-    private static final String CONCAT_SUFFIX = "$concat";
+    private static final String CONCAT_SUFFIX = "$concat.";
     /**
      * This is appended to the end of the Segment/Transaction name to indicate it stores its State.
      */
@@ -208,7 +208,7 @@ public final class StreamSegmentNameUtils {
      */
     public static String getSegmentChunkNamePrefix(String segmentName) {
         Preconditions.checkArgument(!segmentName.contains(OFFSET_SUFFIX), "segmentName is already a SegmentChunk name");
-        return segmentName + "{" +OFFSET_SUFFIX + "[0-9]*," + SEALED_FLAG + "}";
+        return segmentName + "{" +OFFSET_SUFFIX + "[0-9]*," + SEALED_FLAG + "," + CONCAT_SUFFIX + "[0-9]*}";
 
     }
 

@@ -696,6 +696,7 @@ public class NoAppendRollingStorage implements SyncStorage {
         //Add original chunks
         chunkList.addAll(chunks.stream()
                                              .filter(name -> !name.equals(StreamSegmentNameUtils.getSealedNameFor(segmentName)))
+                                             .filter(name -> StreamSegmentNameUtils.isConcatName(name))
                                              .map(name -> {
                                                  try {
                                                      return new SegmentChunk(name, Integer.parseInt(name.substring(name.lastIndexOf(".") + 1)));
