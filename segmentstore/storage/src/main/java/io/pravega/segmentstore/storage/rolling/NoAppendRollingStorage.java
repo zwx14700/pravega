@@ -29,7 +29,9 @@ import io.pravega.segmentstore.storage.SegmentRollingPolicy;
 import io.pravega.segmentstore.storage.StorageNotPrimaryException;
 import io.pravega.segmentstore.storage.SyncStorage;
 import io.pravega.shared.segment.StreamSegmentNameUtils;
+import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -674,9 +676,25 @@ public class NoAppendRollingStorage implements SyncStorage {
         RollingSegmentHandle handle = HandleSerializer.deserialize(readBuffer, headerHandle);
         String chunkNamePrefix = StreamSegmentNameUtils.getSegmentChunkNamePrefix(segmentName);
         List<String> chunks = this.baseStorage.list(chunkNamePrefix);
-        //TODO: Take care of commit segments
 
-        List<SegmentChunk> chunkList = chunks.stream()
+        //Create a list of concat chunks
+        List<SegmentChunk> chunkList = new ArrayList<>();
+
+        chunks.stream()
+              .filter(name -> StreamSegmentNameUtils.isConcatName(name))
+              .forEach(name -> {
+                  RollingSegmentHandle concatHandle = null;
+                  try {
+                      concatHandle = getConcatSegmentHandleFor(name);
+                  } catch (StreamSegmentException e) {
+                      //TODO: Throw silently
+                      e.printStackTrace();
+                  }
+                  chunkList.addAll(rebase(concatHandle.chunks(), Integer.parseInt(name.substring(name.lastIndexOf(".") + 1))));
+              });
+
+        //Add original chunks
+        chunkList.addAll(chunks.stream()
                                              .filter(name -> !name.equals(StreamSegmentNameUtils.getSealedNameFor(segmentName)))
                                              .map(name -> {
                                                  try {
@@ -686,11 +704,12 @@ public class NoAppendRollingStorage implements SyncStorage {
                                                  }
                                                  return null;
                                              })
-                                             .collect(Collectors.toList());
+                                             .collect(Collectors.toList()));
 
         chunkList.sort((c1, c2) -> {
             return (int) (c1.getStartOffset() - c2.getStartOffset());
         });
+
         // Update each SegmentChunk's Length (based on offset difference) and mark them as Sealed.
         SegmentChunk last = null;
         for (SegmentChunk s: chunkList) {
@@ -708,6 +727,15 @@ public class NoAppendRollingStorage implements SyncStorage {
         return handle;
     }
 
+    private RollingSegmentHandle getConcatSegmentHandleFor(String name) throws StreamSegmentException {
+        SegmentProperties properties = this.baseStorage.getStreamSegmentInfo(name);
+        SegmentHandle readHandle = this.baseStorage.openRead(name);
+        byte[] buffer = new byte[(int) properties.getLength()];
+        this.baseStorage.read(readHandle, 0, buffer, 0, buffer.length);
+        return this.openHandle(new String(buffer), true);
+
+    }
+
     private void serializeHandle(RollingSegmentHandle handle) throws StreamSegmentException {
         ByteArraySegment handleData = HandleSerializer.serialize(handle);
         try {
@@ -720,33 +748,13 @@ public class NoAppendRollingStorage implements SyncStorage {
         }
     }
 
-    /* No need to serialize. The filename is enough...
-    private void serializeNewChunk(RollingSegmentHandle handle, SegmentChunk newSegmentChunk) throws StreamSegmentException {
-        updateHandle(handle, HandleSerializer.serializeChunk(newSegmentChunk));
-    }*/
-
     private void serializeConcatHeader(RollingSegmentHandle targetHandle, RollingSegmentHandle sourceHandle) throws StreamSegmentException {
-        //TODO: Create a concat segment ...
-        //Create Concat header
-        //It a Concat header already exists either clean up or throw error.
-        //Write source name to the header
-
-    /*    byte[] updateData = HandleSerializer.serializeConcat(sourceHandle.chunks().size(), targetHandle.length());
-      updateHandle(targetHandle, updateData);*/
+        String concatChunkName = StreamSegmentNameUtils.getconcatName(targetHandle.getSegmentName(), sourceHandle.length());
+        this.baseStorage.create(concatChunkName);
+        SegmentHandle concatHandle = this.baseStorage.openWrite(concatChunkName);
+        this.baseStorage.write(concatHandle, 0, new ByteArrayInputStream(sourceHandle.getSegmentName().getBytes()), sourceHandle.getSegmentName().getBytes().length);
     }
 
-    /*
-    private void updateHandle(RollingSegmentHandle handle, byte[] data) throws StreamSegmentException {
-        try {
-            this.baseStorage.write(handle.getHeaderHandle(), handle.getHeaderLength(), new ByteArrayInputStream(data), data.length);
-            handle.increaseHeaderLength(data.length);
-            log.debug("Header for '{}' updated with {} bytes for a length of {}.", handle.getSegmentName(), data.length, handle.getHeaderLength());
-        } catch (BadOffsetException ex) {
-            // If we get BadOffsetException when writing the Handle, it means it was modified externally.
-            throw new StorageNotPrimaryException(handle.getSegmentName(), ex);
-        }
-    }
-    */
     //endregion
 
     //region Helpers

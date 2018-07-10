@@ -28,7 +28,7 @@ public final class StreamSegmentNameUtils {
     /**
      * This prefix denotes that a base storage contains details about concat with other rolling storage.
      */
-    private static final String CONCAT_FLAG = "Concat";
+    private static final String CONCAT_SUFFIX = "$concat";
     /**
      * This is appended to the end of the Segment/Transaction name to indicate it stores its State.
      */
@@ -339,5 +339,25 @@ public final class StreamSegmentNameUtils {
      */
     public static String getSealedNameFor(String segmentName) {
         return segmentName + SEALED_FLAG;
+    }
+
+    /**
+     * Returns chunkname which represents concat header at a given offset.
+     * @param segmentName Name of the segment for which concat header is created.
+     * @param length Offset at which the concat is made.
+     * @return
+     */
+    public static String getconcatName(String segmentName, long length) {
+        return segmentName + CONCAT_SUFFIX + Long.toString(length);
+    }
+
+    /**
+     * Returns whether a segment name represents a concat segment.
+     * @param name Name of the segment.
+     * @return      Whether this is a concat segment.
+     */
+    public static boolean isConcatName(String name) {
+        //TODO: Use more appropriate strategy.
+        return name.contains(CONCAT_SUFFIX);
     }
 }

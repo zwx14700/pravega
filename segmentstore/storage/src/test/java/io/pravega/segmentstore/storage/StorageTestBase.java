@@ -377,11 +377,11 @@ public abstract class StorageTestBase extends ThreadPooledTestSuite {
     @Test
     public abstract void testFencing() throws Exception;
 
-    private String getSegmentName(int id, String context) {
+    protected String getSegmentName(int id, String context) {
         return String.format("%s_%s", context, id);
     }
 
-    private HashMap<String, ByteArrayOutputStream> populate(Storage s, String context) throws Exception {
+    protected HashMap<String, ByteArrayOutputStream> populate(Storage s, String context) throws Exception {
         HashMap<String, ByteArrayOutputStream> appendData = new HashMap<>();
         byte[] extraData = new byte[1024];
         for (int segmentId = 0; segmentId < SEGMENT_COUNT; segmentId++) {
