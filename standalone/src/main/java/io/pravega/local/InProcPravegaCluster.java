@@ -257,10 +257,12 @@ public class InProcPravegaCluster implements AutoCloseable {
                         .with(ServiceConfig.CERT_FILE, this.certFile)
                         .with(ServiceConfig.CACHE_POLICY_MAX_TIME, 60)
                         .with(ServiceConfig.CACHE_POLICY_MAX_SIZE, 128 * 1024 * 1024L)
-                        .with(ServiceConfig.DATALOG_IMPLEMENTATION, ServiceConfig.DataLogType.INMEMORY)
+                        .with(ServiceConfig.DATALOG_IMPLEMENTATION, isInMemStorage ?
+                                ServiceConfig.DataLogType.INMEMORY :
+                                ServiceConfig.DataLogType.BOOKKEEPER)
                         .with(ServiceConfig.STORAGE_IMPLEMENTATION, isInMemStorage ?
                                 ServiceConfig.StorageType.INMEMORY :
-                                ServiceConfig.StorageType.NOAPPEND_HDFS))
+                                ServiceConfig.StorageType.FILESYSTEM))
                 .include(DurableLogConfig.builder()
                         .with(DurableLogConfig.CHECKPOINT_COMMIT_COUNT, 100)
                         .with(DurableLogConfig.CHECKPOINT_MIN_COMMIT_COUNT, 100)
