@@ -22,7 +22,7 @@ import javax.annotation.concurrent.ThreadSafe;
 import lombok.Getter;
 
 @ThreadSafe
-class RollingSegmentHandle implements SegmentHandle {
+public class RollingSegmentHandle implements SegmentHandle {
     //region Members
 
     /**
@@ -162,7 +162,7 @@ class RollingSegmentHandle implements SegmentHandle {
      *
      * @return A List with SegmentChunks.
      */
-    synchronized List<SegmentChunk> chunks() {
+    public synchronized List<SegmentChunk> chunks() {
         if (this.sealed) {
             return this.segmentChunks; // This is already an unmodifiable list.
         } else {

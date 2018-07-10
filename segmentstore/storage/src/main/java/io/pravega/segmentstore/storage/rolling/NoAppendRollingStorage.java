@@ -338,9 +338,15 @@ public class NoAppendRollingStorage implements SyncStorage {
     public void seal(SegmentHandle handle) throws StreamSegmentException {
         val h = asWritableHandle(handle);
         ensureNotDeleted(h);
+        if (!exists(handle.getSegmentName())) {
+            throw new StreamSegmentNotExistsException(handle.getSegmentName());
+        }
         long traceId = LoggerHelpers.traceEnter(log, "seal", handle);
         sealActiveChunk(h);
-        this.baseStorage.create(StreamSegmentNameUtils.getSealedNameFor(h.getSegmentName()));
+        String sealedName = StreamSegmentNameUtils.getSealedNameFor(h.getSegmentName());
+        if (!this.baseStorage.exists(sealedName)) {
+            this.baseStorage.create(sealedName);
+        }
         h.markSealed();
         log.debug("Sealed Header for '{}'.", h.getSegmentName());
         LoggerHelpers.traceLeave(log, "seal", traceId, handle);
@@ -627,17 +633,7 @@ public class NoAppendRollingStorage implements SyncStorage {
     }
 
     private boolean shouldConcatNatively(RollingSegmentHandle source, RollingSegmentHandle target) {
-        if (source.getHeaderHandle() == null) {
-            // Source does not have a Header, hence we cannot do Header concat.
-            return true;
-        }
-
-        SegmentChunk lastSource = source.lastChunk();
-        SegmentChunk lastTarget = target.lastChunk();
-        return lastSource != null && lastSource.getStartOffset() == 0
-                && lastTarget != null && !lastTarget.isSealed();
-        //Always prefer native concats irrespective of the size
-        //&& lastTarget.getLength() + lastSource.getLength() <= target.getRollingPolicy().getMaxLength();
+      return false;
     }
 
     private RollingSegmentHandle openHandle(String segmentName, boolean readOnly) throws StreamSegmentException {
@@ -722,6 +718,9 @@ public class NoAppendRollingStorage implements SyncStorage {
                 last.markSealed();
             }
             last = s;
+        }
+        if (last != null) {
+            last.setLength(this.baseStorage.getStreamSegmentInfo(last.getName()).getLength());
         }
         handle.addChunks(chunkList);
 

@@ -9,21 +9,15 @@
  */
 package io.pravega.segmentstore.storage.impl.noappendhdfs;
 
-import io.pravega.common.Exceptions;
-import io.pravega.common.concurrent.Futures;
-import io.pravega.common.io.EnhancedByteArrayOutputStream;
 import io.pravega.common.io.FileHelpers;
 import io.pravega.segmentstore.contracts.SegmentProperties;
 import io.pravega.segmentstore.contracts.StreamSegmentNotExistsException;
-import io.pravega.segmentstore.contracts.StreamSegmentSealedException;
-import io.pravega.segmentstore.storage.AsyncStorageWrapper;
 import io.pravega.segmentstore.storage.SegmentHandle;
 import io.pravega.segmentstore.storage.SegmentRollingPolicy;
 import io.pravega.segmentstore.storage.Storage;
-import io.pravega.segmentstore.storage.StorageNotPrimaryException;
-import io.pravega.segmentstore.storage.StorageTestBase;
 import io.pravega.segmentstore.storage.impl.hdfs.HDFSClusterHelpers;
 import io.pravega.segmentstore.storage.impl.hdfs.HDFSStorageConfig;
+import io.pravega.segmentstore.storage.rolling.RollingSegmentHandle;
 import io.pravega.segmentstore.storage.rolling.RollingStorageTestBase;
 import io.pravega.test.common.AssertExtensions;
 import java.io.ByteArrayInputStream;
@@ -34,9 +28,7 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Random;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 import lombok.Cleanup;
 import lombok.SneakyThrows;
 import lombok.val;
@@ -61,317 +53,7 @@ import static io.pravega.test.common.AssertExtensions.assertThrows;
 /**
  * Unit tests for HDFSStorage.
  */
-public class NoAppendHDFSStorageTest extends StorageTestBase {
-    private static final int WRITE_COUNT = 5;
-
-    @Rule
-    public Timeout globalTimeout = Timeout.seconds(TIMEOUT.getSeconds());
-    private File baseDir = null;
-    private MiniDFSCluster hdfsCluster = null;
-    private HDFSStorageConfig adapterConfig;
-
-    @Before
-    public void setUp() throws Exception {
-        this.baseDir = Files.createTempDirectory("test_hdfs").toFile().getAbsoluteFile();
-        this.hdfsCluster = HDFSClusterHelpers.createMiniDFSCluster(this.baseDir.getAbsolutePath());
-        this.adapterConfig = HDFSStorageConfig
-                .builder()
-                .with(HDFSStorageConfig.REPLICATION, 1)
-                .with(HDFSStorageConfig.URL, String.format("hdfs://localhost:%d/", hdfsCluster.getNameNodePort()))
-                .build();
-    }
-
-    @After
-    public void tearDown() {
-        if (hdfsCluster != null) {
-            hdfsCluster.shutdown();
-            hdfsCluster = null;
-            FileHelpers.deleteFileOrDirectory(baseDir);
-            baseDir = null;
-        }
-    }
-
-    //region Fencing tests
-    /**
-     * A special test case of fencing to verify the behavior of HDFSStorage in the presence of an instance that has
-     * been fenced out. This case verifies that any ongoing writes properly fail upon fencing. Specifically, we have a
-     * fenced-out instance that keeps writing and we verify that the write fails once the ownership changes.
-     * The HDFS behavior is such in this case is that ongoing writes that execute before the rename
-     * complete successfully.
-     */
-    @Test(timeout = 60000)
-    public void testZombieFencing() throws Exception {
-        final long epochCount = 30;
-        final int writeSize = 1000;
-        final String segmentName = "Segment";
-        val writtenData = new EnhancedByteArrayOutputStream();
-        final Random rnd = new Random(0);
-        int currentEpoch = 1;
-
-        // Create initial adapter.
-        val currentStorage = new AtomicReference<Storage>();
-        currentStorage.set(createStorage());
-        currentStorage.get().initialize(currentEpoch);
-
-        // Create the Segment and open it for the first time.
-        val currentHandle = new AtomicReference<SegmentHandle>(
-                currentStorage.get().create(segmentName, TIMEOUT)
-                              .thenCompose(v -> currentStorage.get().openWrite(segmentName))
-                              .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
-
-        // Run a number of epochs.
-        while (currentEpoch <= epochCount) {
-            val oldStorage = currentStorage.get();
-            val handle = currentHandle.get();
-            val writeBuffer = new byte[writeSize];
-            val appends = Futures.loop(
-                    () -> true,
-                    () -> {
-                        rnd.nextBytes(writeBuffer);
-                        return oldStorage.write(handle, writtenData.size(), new ByteArrayInputStream(writeBuffer), writeBuffer.length, TIMEOUT)
-                                         .thenRun(() -> writtenData.write(writeBuffer));
-                    },
-                    executorService());
-
-            // Create a new Storage adapter with a new epoch and open-write the Segment, remembering its handle.
-            val newStorage = createStorage();
-            try {
-                newStorage.initialize(++currentEpoch);
-                currentHandle.set(newStorage.openWrite(segmentName).get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
-            } catch (Exception ex) {
-                newStorage.close();
-                throw ex;
-            }
-
-            currentStorage.set(newStorage);
-            try {
-                appends.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-                Assert.fail("Continuous appends on older epoch Adapter did not fail.");
-            } catch (Exception ex) {
-                val cause = Exceptions.unwrap(ex);
-                if (!(cause instanceof StorageNotPrimaryException || cause instanceof StreamSegmentSealedException
-                        || cause instanceof StreamSegmentNotExistsException)) {
-                    // We only expect the appends to fail because they were fenced out or the Segment was sealed.
-                    Assert.fail("Unexpected exception " + cause);
-                }
-            } finally {
-                oldStorage.close();
-            }
-        }
-
-        byte[] expectedData = writtenData.toByteArray();
-        byte[] readData = new byte[expectedData.length];
-        @Cleanup
-        val readStorage = createStorage();
-        readStorage.initialize(++currentEpoch);
-        int bytesRead = readStorage
-                .openRead(segmentName)
-                .thenCompose(handle -> readStorage.read(handle, 0, readData, 0, readData.length, TIMEOUT))
-                .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-        Assert.assertEquals("Unexpected number of bytes read.", readData.length, bytesRead);
-        Assert.assertArrayEquals("Unexpected data read back.", expectedData, readData);
-    }
-
-    /**
-     * Tests fencing abilities. We create two different Storage objects with different owner ids.
-     * Part 1: Creation:
-     * * We create the Segment on Storage1:
-     * ** We verify that Storage1 can execute all operations.
-     * ** We verify that Storage2 can execute only read-only operations.
-     * * We open the Segment on Storage2:
-     * ** We verify that Storage1 can execute only read-only operations.
-     * ** We verify that Storage2 can execute all operations.
-     */
-    @Test
-    @Override
-    public void testFencing() {
-        final long epoch1 = 1;
-        final long epoch2 = 2;
-        final String segmentName = "segment";
-        try (val storage1 = createStorage();
-             val storage2 = createStorage()) {
-            storage1.initialize(epoch1);
-            storage2.initialize(epoch2);
-
-            // Create segment in Storage1 (thus Storage1 owns it for now).
-            storage1.create(segmentName, TIMEOUT).join();
-
-            // Storage1 should be able to execute all operations.
-            SegmentHandle handle1 = storage1.openWrite(segmentName).join();
-            verifyWriteOperationsSucceed(handle1, storage1);
-            verifyReadOnlyOperationsSucceed(handle1, storage1);
-
-            // Open the segment in Storage2 (thus Storage2 owns it for now).
-            SegmentHandle handle2 = storage2.openWrite(segmentName).join();
-
-            // Storage1 should be able to execute only read-only operations.
-            verifyWriteOperationsFail(handle1, storage1);
-            verifyReadOnlyOperationsSucceed(handle1, storage1);
-
-            // Storage2 should be able to execute all operations.
-            verifyReadOnlyOperationsSucceed(handle2, storage2);
-            verifyWriteOperationsSucceed(handle2, storage2);
-
-            // Seal and Delete (these should be run last, otherwise we can't run our test).
-            verifyFinalWriteOperationsFail(handle1, storage1);
-            verifyFinalWriteOperationsSucceed(handle2, storage2);
-        }
-    }
-
-    //endregion
-
-    @Override
-    protected Storage createStorage() {
-        return new AsyncStorageWrapper(new TestHDFSStorage(this.adapterConfig), executorService());
-    }
-
-    // region HDFS specific tests
-
-    /**
-     * Tests general GetInfoOperation behavior.
-     */
-    @Test
-    public void testGetInfo() throws Exception {
-        String segmentName = "foo_open";
-        try (Storage s = createStorage()) {
-            s.initialize(DEFAULT_EPOCH);
-            createSegment(segmentName, s);
-            SegmentHandle handle = s.openWrite(segmentName).join();
-
-            long expectedLength = 0;
-
-            for (int i = 0; i < WRITE_COUNT; i++) {
-                byte[] data = new byte[i + 1];
-                s.write(handle, expectedLength, new ByteArrayInputStream(data), data.length, null).join();
-                expectedLength += data.length;
-            }
-
-            SegmentProperties result = s.getStreamSegmentInfo(segmentName, null).join();
-
-            validateProperties("pre-seal", segmentName, result, expectedLength, false);
-
-            // Seal.
-            s.seal(handle, null).join();
-            result = s.getStreamSegmentInfo(segmentName, null).join();
-            validateProperties("post-seal", segmentName, result, expectedLength, true);
-
-            // Inexistent segment.
-            AssertExtensions.assertThrows(
-                    "GetInfo succeeded on missing segment.",
-                    s.getStreamSegmentInfo("non-existent", null),
-                    ex -> ex instanceof StreamSegmentNotExistsException);
-        }
-    }
-
-    private void validateProperties(String stage, String segmentName, SegmentProperties sp, long expectedLength, boolean expectedSealed) {
-        Assert.assertNotNull("No result from GetInfoOperation (" + stage + ").", sp);
-        Assert.assertEquals("Unexpected name (" + stage + ").", segmentName, sp.getName());
-        Assert.assertEquals("Unexpected length (" + stage + ").", expectedLength, sp.getLength());
-        Assert.assertEquals("Unexpected sealed status (" + stage + ").", expectedSealed, sp.isSealed());
-    }
-
-    /**
-     * Tests the exists API.
-     */
-    @Test
-    public void testExists() throws Exception {
-        final int epoch = 1;
-        final int offset = 0;
-
-        String segmentName = "foo_open";
-        try (Storage s = createStorage()) {
-            s.initialize(DEFAULT_EPOCH);
-            createSegment(segmentName, s);
-
-            // Not exists.
-            Assert.assertFalse("Unexpected result for missing segment (no files).", s.exists("nonexistent", null).join());
-        }
-    }
-
-    /**
-     * Tests a read scenario with no issues or failures.
-     */
-    @Test
-    public void testNormalRead() throws Exception {
-        // Write data.
-        String segmentName = "foo_open";
-        val rnd = new Random(0);
-        try (Storage s = createStorage()) {
-            s.initialize(DEFAULT_EPOCH);
-            createSegment(segmentName, s);
-            SegmentHandle handle = s.openWrite(segmentName).join();
-
-            long expectedLength = 0;
-
-            ByteArrayOutputStream writtenData = new ByteArrayOutputStream();
-            for (int i = 0; i < WRITE_COUNT; i++) {
-                byte[] data = new byte[i + 1];
-                rnd.nextBytes(data);
-                s.write(handle, expectedLength, new ByteArrayInputStream(data), data.length, null).join();
-                writtenData.write(data);
-                expectedLength += data.length;
-            }
-
-            // Check written data via a Read Operation, from every offset from 0 to length/2
-            byte[] expectedData = writtenData.toByteArray();
-            val readHandle = s.openRead(segmentName).join();
-            for (int startOffset = 0; startOffset < expectedLength / 2; startOffset++) {
-                int readLength = (int) (expectedLength - 2 * startOffset);
-                byte[] actualData = new byte[readLength];
-                int readBytes = s.read(readHandle, startOffset, actualData, 0, actualData.length, null).join();
-
-                Assert.assertEquals("Unexpected number of bytes read with start offset " + startOffset, actualData.length, readBytes);
-                AssertExtensions.assertArrayEquals("Unexpected data read back with start offset " + startOffset,
-                        expectedData, startOffset, actualData, 0, readLength);
-            }
-        }
-    }
-
-    /**
-     * Tests the case when the segment ownership changes while the read operation is on.
-     */
-    @Test
-    public void testRefreshHandleOffset() throws Exception {
-        String segmentName = "foo_open";
-        val rnd = new Random(0);
-        try (Storage s = createStorage();
-             Storage s2 = createStorage()) {
-            s.initialize(DEFAULT_EPOCH);
-            s2.initialize(DEFAULT_EPOCH + 1);
-
-            createSegment(segmentName, s);
-            SegmentHandle handle = s.openWrite(segmentName).join();
-
-            long expectedLength = 0;
-
-            ByteArrayOutputStream writtenData = new ByteArrayOutputStream();
-            for (int i = 0; i < WRITE_COUNT; i++) {
-                byte[] data = new byte[i + 1];
-                rnd.nextBytes(data);
-                s.write(handle, expectedLength, new ByteArrayInputStream(data), data.length, null).join();
-                writtenData.write(data);
-                expectedLength += data.length;
-            }
-
-            // Check written data via a Read Operation, from every offset from 0 to length/2
-            byte[] expectedData = writtenData.toByteArray();
-            val readHandle = s.openRead(segmentName).join();
-            for (int startOffset = 0; startOffset < expectedLength / 2; startOffset++) {
-                int readLength = (int) (expectedLength - 2 * startOffset);
-                byte[] actualData = new byte[readLength];
-                int readBytes = s.read(readHandle, startOffset, actualData, 0, actualData.length, null).join();
-
-                Assert.assertEquals("Unexpected number of bytes read with start offset " + startOffset, actualData.length, readBytes);
-                AssertExtensions.assertArrayEquals("Unexpected data read back with start offset " + startOffset,
-                        expectedData, startOffset, actualData, 0, readLength);
-                //Change ownership of the segment
-                s2.openWrite(segmentName).join();
-            }
-        }
-    }
-
-    // endregion
-
+public class NoAppendHDFSStorageTest {
     //region RollingStorageTests
 
     /**
@@ -410,6 +92,100 @@ public class NoAppendHDFSStorageTest extends StorageTestBase {
         protected Storage createStorage() {
             return wrap(new TestHDFSStorage(this.adapterConfig));
         }
+
+
+        /**
+         * Tests a scenario that would concatenate various segments successively into an initially empty segment while not
+         * producing an excessive number of chunks. The initial concat will use header merge since the segment has no chunks,
+         * but successive concats should unseal that last chunk and concat to it using the native method.
+         * <p>
+         * NOTE: this could be moved down into RollingStorageTests.java, however it being here ensures that unseal() is being
+         * exercised in all classes that derive from this, which is all of the Storage implementations.
+         *
+         * @throws Exception If one occurred.
+         */
+        @Override
+        @Test
+        public void testSuccessiveConcats() throws Exception {
+            final String segmentName = "Segment";
+            final int writeLength = 21;
+            final int concatCount = 10;
+
+            @Cleanup
+            val s = createStorage();
+            s.initialize(1);
+
+            // Create Target Segment with infinite rolling. Do not write anything to it yet.
+            val writeHandle = s.create(segmentName, SegmentRollingPolicy.NO_ROLLING, TIMEOUT)
+                               .thenCompose(v -> s.openWrite(segmentName)).join();
+
+            final Random rnd = new Random(0);
+            byte[] writeBuffer = new byte[writeLength];
+            val writeStream = new ByteArrayOutputStream();
+            for (int i = 0; i < concatCount; i++) {
+                // Create a source segment, write a little bit to it, then seal & merge it.
+                String sourceSegment = segmentName + "_Source_" + i;
+                val sourceHandle = s.create(sourceSegment, TIMEOUT).thenCompose(v -> s.openWrite(sourceSegment)).join();
+                rnd.nextBytes(writeBuffer);
+                s.write(sourceHandle, 0, new ByteArrayInputStream(writeBuffer), writeBuffer.length, TIMEOUT).join();
+                s.seal(sourceHandle, TIMEOUT).join();
+                s.concat(writeHandle, writeStream.size(), sourceSegment, TIMEOUT).join();
+                writeStream.write(writeBuffer);
+            }
+
+            // Write directly to the target segment - this ensures that writes themselves won't create a new chunk if the
+            // write can still fit into the last chunk.
+            rnd.nextBytes(writeBuffer);
+            s.write(writeHandle, writeStream.size(), new ByteArrayInputStream(writeBuffer), writeBuffer.length, TIMEOUT).join();
+            writeStream.write(writeBuffer);
+
+            // Get a read handle, which will also fetch the number of chunks for us.
+            val readHandle = (RollingSegmentHandle) s.openRead(segmentName).join();
+            Assert.assertEquals("Unexpected number of chunks created.", 11, readHandle.chunks().size());
+            val writtenData = writeStream.toByteArray();
+            byte[] readBuffer = new byte[writtenData.length];
+            int bytesRead = s.read(readHandle, 0, readBuffer, 0, readBuffer.length, TIMEOUT).join();
+            Assert.assertEquals("Unexpected number of bytes read.", readBuffer.length, bytesRead);
+            Assert.assertArrayEquals("Unexpected data read back.", writtenData, readBuffer);
+        }
+
+        @Override
+        @Test
+        public void testWriteAfterHeaderMerge() throws Exception {
+            final String segmentName = "Segment";
+            final int writeLength = 21;
+
+            @Cleanup
+            val s = createStorage();
+            s.initialize(1);
+
+            // Create Target Segment with infinite rolling. Do not write anything to it yet.
+            val writeHandle = s.create(segmentName, SegmentRollingPolicy.NO_ROLLING, TIMEOUT)
+                               .thenCompose(v -> s.openWrite(segmentName)).join();
+
+            final Random rnd = new Random(0);
+            byte[] writeBuffer = new byte[writeLength];
+            val writeStream = new ByteArrayOutputStream();
+
+            // Create a source segment, write a little bit to it, then seal & merge it.
+            String sourceSegment = segmentName + "_Source";
+            val sourceHandle = s.create(sourceSegment, TIMEOUT).thenCompose(v -> s.openWrite(sourceSegment)).join();
+            rnd.nextBytes(writeBuffer);
+            s.write(sourceHandle, 0, new ByteArrayInputStream(writeBuffer), writeBuffer.length, TIMEOUT).join();
+            s.seal(sourceHandle, TIMEOUT).join();
+            s.concat(writeHandle, writeStream.size(), sourceSegment, TIMEOUT).join();
+            writeStream.write(writeBuffer);
+
+            // Write directly to the target segment.
+            rnd.nextBytes(writeBuffer);
+            s.write(writeHandle, writeStream.size(), new ByteArrayInputStream(writeBuffer), writeBuffer.length, TIMEOUT).join();
+            writeStream.write(writeBuffer);
+
+            // Get a read handle, which will also fetch the number of chunks for us.
+            val readHandle = (RollingSegmentHandle) s.openRead(segmentName).join();
+            Assert.assertEquals("Unexpected number of chunks created.", 2, readHandle.chunks().size());
+        }
+
         /**
          * Tests the concat() method.
          *
