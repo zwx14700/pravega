@@ -12,11 +12,15 @@ package io.pravega.segmentstore.storage.impl.noappendhdfs;
 import io.pravega.common.io.FileHelpers;
 import io.pravega.segmentstore.contracts.SegmentProperties;
 import io.pravega.segmentstore.contracts.StreamSegmentNotExistsException;
+import io.pravega.segmentstore.storage.AsyncStorageWrapper;
+import io.pravega.segmentstore.storage.NoAppendSyncStorage;
 import io.pravega.segmentstore.storage.SegmentHandle;
 import io.pravega.segmentstore.storage.SegmentRollingPolicy;
 import io.pravega.segmentstore.storage.Storage;
+import io.pravega.segmentstore.storage.SyncStorage;
 import io.pravega.segmentstore.storage.impl.hdfs.HDFSClusterHelpers;
 import io.pravega.segmentstore.storage.impl.hdfs.HDFSStorageConfig;
+import io.pravega.segmentstore.storage.rolling.NoAppendRollingStorage;
 import io.pravega.segmentstore.storage.rolling.RollingSegmentHandle;
 import io.pravega.segmentstore.storage.rolling.RollingStorageTestBase;
 import io.pravega.test.common.AssertExtensions;
@@ -93,6 +97,10 @@ public class NoAppendHDFSStorageTest {
             return wrap(new TestHDFSStorage(this.adapterConfig));
         }
 
+        @Override
+        protected Storage wrap(SyncStorage storage) {
+            return new AsyncStorageWrapper(new NoAppendRollingStorage((NoAppendSyncStorage) storage, SegmentRollingPolicy.ALWAYS_ROLLING), executorService());
+        }
 
         /**
          * Tests a scenario that would concatenate various segments successively into an initially empty segment while not
@@ -141,7 +149,7 @@ public class NoAppendHDFSStorageTest {
 
             // Get a read handle, which will also fetch the number of chunks for us.
             val readHandle = (RollingSegmentHandle) s.openRead(segmentName).join();
-            Assert.assertEquals("Unexpected number of chunks created.", 11, readHandle.chunks().size());
+            Assert.assertEquals("Unexpected number of chunks created.", 32, readHandle.chunks().size());
             val writtenData = writeStream.toByteArray();
             byte[] readBuffer = new byte[writtenData.length];
             int bytesRead = s.read(readHandle, 0, readBuffer, 0, readBuffer.length, TIMEOUT).join();
@@ -183,7 +191,7 @@ public class NoAppendHDFSStorageTest {
 
             // Get a read handle, which will also fetch the number of chunks for us.
             val readHandle = (RollingSegmentHandle) s.openRead(segmentName).join();
-            Assert.assertEquals("Unexpected number of chunks created.", 2, readHandle.chunks().size());
+            Assert.assertEquals("Unexpected number of chunks created.", 5, readHandle.chunks().size());
         }
 
         /**

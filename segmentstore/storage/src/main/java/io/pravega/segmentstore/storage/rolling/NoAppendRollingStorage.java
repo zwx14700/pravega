@@ -324,11 +324,9 @@ public class NoAppendRollingStorage implements SyncStorage {
             this.baseStorage.write(h.getActiveChunkHandle(), chunkOffset, data, writeLength);
             last.increaseLength(writeLength);
             bytesWritten += writeLength;
+            //Rollover as the next write should happen to another segment..
+            rollover(h);
 
-            //Rollover if the policy demands it..
-            if (h.getActiveChunkHandle() == null || h.lastChunk().getLength() >= h.getRollingPolicy().getMaxLength()) {
-                rollover(h);
-            }
         }
 
         LoggerHelpers.traceLeave(log, "write", traceId, handle, offset, bytesWritten);
@@ -674,53 +672,51 @@ public class NoAppendRollingStorage implements SyncStorage {
         String chunkNamePrefix = StreamSegmentNameUtils.getSegmentChunkNamePrefix(segmentName);
         List<String> chunks = this.baseStorage.list(chunkNamePrefix);
 
-        //Create a list of concat chunks
-        List<SegmentChunk> chunkList = new ArrayList<>();
+        String sealedName = StreamSegmentNameUtils.getSealedNameFor(segmentName);
 
-        chunks.stream()
-              .filter(name -> StreamSegmentNameUtils.isConcatName(name))
-              .forEach(name -> {
-                  RollingSegmentHandle concatHandle = null;
-                  try {
-                      concatHandle = getConcatSegmentHandleFor(name);
-                  } catch (StreamSegmentException e) {
-                      //TODO: Throw silently
-                      e.printStackTrace();
-                  }
-                  List<SegmentChunk> rebased = rebase(concatHandle.chunks(), Integer.parseInt(name.substring(name.lastIndexOf(".") + 1)));
-                  rebased.stream().forEach(segmentChunk -> segmentChunk.markUnsealed());
-                  chunkList.addAll(rebased);
-              });
-
-        //Add original chunks
-        chunkList.addAll(chunks.stream()
-                                             .filter(name -> !name.equals(StreamSegmentNameUtils.getSealedNameFor(segmentName)))
-                                             .filter(name -> !StreamSegmentNameUtils.isConcatName(name))
-                                             .map(name -> {
-                                                 try {
-                                                     return new SegmentChunk(name, Integer.parseInt(name.substring(name.lastIndexOf(".") + 1)));
-                                                 } catch (Exception e) {
-                                                     e.printStackTrace();
-                                                 }
-                                                 return null;
-                                             })
-                                             .collect(Collectors.toList()));
-
-        chunkList.sort((c1, c2) -> {
-            return (int) (c1.getStartOffset() - c2.getStartOffset());
+        chunks.sort((c1, c2) -> {
+            if (c1.equals(sealedName)) {
+            return -1;
+        } else if (c2.equals(sealedName)) {
+            return 1;
+        } else {
+            return Integer.parseInt(c1.substring(c1.lastIndexOf(".") + 1)) -
+                    Integer.parseInt(c2.substring(c2.lastIndexOf(".") + 1));
+        }
         });
 
-        // Update each SegmentChunk's Length (based on offset difference) and mark them as Sealed.
-        SegmentChunk last = null;
-        for (SegmentChunk s: chunkList) {
-            if (last != null) {
-                last.setLength(s.getStartOffset() - last.getStartOffset());
-                last.markSealed();
-            }
-            last = s;
+        List<SegmentChunk> chunkList = new ArrayList<>();
+
+        //Add chunks according to offsets ..
+        int startOffset = 0;
+        if (!chunks.isEmpty()) {
+            String first = chunks.get(0);
+            startOffset = Integer.parseInt(first.substring(first.lastIndexOf(".") + 1));
         }
-        if (last != null) {
-            last.setLength(this.baseStorage.getStreamSegmentInfo(last.getName()).getLength());
+        for (String s: chunks) {
+            if (StreamSegmentNameUtils.isConcatName(s)) {
+                RollingSegmentHandle concatHandle = null;
+                try {
+                    concatHandle = getConcatSegmentHandleFor(s);
+                } catch (StreamSegmentException e) {
+                    //TODO: Throw silently
+                    e.printStackTrace();
+                }
+                if (concatHandle != null) {
+                    List<SegmentChunk> rebased = rebase(concatHandle.chunks(), startOffset);
+                    for (SegmentChunk segmentChunk: rebased) {
+                                startOffset += segmentChunk.getLength();
+                                segmentChunk.markUnsealed();
+                    }
+
+                    chunkList.addAll(rebased);
+                }
+            } else {
+                    SegmentChunk segmentChunk = new SegmentChunk(s, startOffset);
+                    segmentChunk.setLength(this.baseStorage.getStreamSegmentInfo(s).getLength());
+                    chunkList.add(segmentChunk);
+                    startOffset += segmentChunk.getLength();
+            }
         }
         handle.addChunks(chunkList);
 
@@ -732,11 +728,14 @@ public class NoAppendRollingStorage implements SyncStorage {
 
     private RollingSegmentHandle getConcatSegmentHandleFor(String name) throws StreamSegmentException {
         SegmentProperties properties = this.baseStorage.getStreamSegmentInfo(name);
-        SegmentHandle readHandle = this.baseStorage.openRead(name);
-        byte[] buffer = new byte[(int) properties.getLength()];
-        this.baseStorage.read(readHandle, 0, buffer, 0, buffer.length);
-        return this.openHandle(new String(buffer), true);
-
+        if (properties.getLength() != 0) {
+            SegmentHandle readHandle = this.baseStorage.openRead(name);
+            byte[] buffer = new byte[(int) properties.getLength()];
+            this.baseStorage.read(readHandle, 0, buffer, 0, buffer.length);
+            return this.openHandle(new String(buffer), true);
+        } else {
+            return null;
+        }
     }
 
     private void serializeHandle(RollingSegmentHandle handle) throws StreamSegmentException {

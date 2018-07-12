@@ -18,6 +18,7 @@ import io.pravega.common.util.Retry;
 import io.pravega.segmentstore.contracts.SegmentProperties;
 import io.pravega.segmentstore.contracts.StreamSegmentException;
 import io.pravega.segmentstore.contracts.StreamSegmentInformation;
+import io.pravega.segmentstore.contracts.StreamSegmentNotExistsException;
 import io.pravega.segmentstore.contracts.StreamSegmentSealedException;
 import io.pravega.segmentstore.storage.NoAppendSyncStorage;
 import io.pravega.segmentstore.storage.SegmentHandle;
@@ -609,9 +610,12 @@ class NoAppendHDFSStorage implements NoAppendSyncStorage {
         return true;
     }
 
-    private int readInternal(SegmentHandle handle, byte[] buffer, long offset, int bufferOffset, int length) throws IOException {
+    private int readInternal(SegmentHandle handle, byte[] buffer, long offset, int bufferOffset, int length) throws IOException, StreamSegmentNotExistsException {
         //There is only one file per segment.
         FileStatus currentFile = findStatusForSegment(handle.getSegmentName(), true);
+        if (currentFile == null) {
+            throw new StreamSegmentNotExistsException(handle.getSegmentName());
+        }
         try (FSDataInputStream stream = this.fileSystem.open(currentFile.getPath())) {
             if (offset + length > stream.available()) {
                 throw new ArrayIndexOutOfBoundsException();
