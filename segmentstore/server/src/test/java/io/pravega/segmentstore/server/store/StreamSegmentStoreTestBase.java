@@ -85,7 +85,7 @@ public abstract class StreamSegmentStoreTestBase extends ThreadPooledTestSuite {
     private static final int MAX_INSTANCE_COUNT = 5;
     private static final List<UUID> ATTRIBUTES = Arrays.asList(Attributes.EVENT_COUNT, UUID.randomUUID(), UUID.randomUUID());
     private static final int EXPECTED_ATTRIBUTE_VALUE = APPENDS_PER_SEGMENT + ATTRIBUTE_UPDATES_PER_SEGMENT;
-    private static final Duration TIMEOUT = Duration.ofSeconds(120);
+    private static final Duration TIMEOUT = Duration.ofSeconds(300);
 
     protected final ServiceBuilderConfig.Builder configBuilder = ServiceBuilderConfig
             .builder()
@@ -824,7 +824,7 @@ public abstract class StreamSegmentStoreTestBase extends ThreadPooledTestSuite {
                                            return Futures.<Void>failedFuture(new TimeoutException(
                                                    String.format("Segment %s did not complete in Storage in the allotted time.", sp.getName())));
                                        } else {
-                                           return Futures.delayedFuture(Duration.ofMillis(100), executorService());
+                                           return Futures.delayedFuture(Duration.ofMillis(500), executorService());
                                        }
                                    }), executorService());
     }
