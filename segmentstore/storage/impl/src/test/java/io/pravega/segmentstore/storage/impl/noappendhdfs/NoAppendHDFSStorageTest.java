@@ -274,6 +274,7 @@ public class NoAppendHDFSStorageTest {
                 Assert.assertEquals("Concat included more bytes than expected.", offset, readBuffer.length);
             }
         }
+
         @Override
         protected long getSegmentRollingSize() {
             // Need to increase this otherwise the test will run for too long.
