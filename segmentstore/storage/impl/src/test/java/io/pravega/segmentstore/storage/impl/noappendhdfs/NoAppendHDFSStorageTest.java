@@ -72,7 +72,6 @@ public class NoAppendHDFSStorageTest {
 
         @Before
         public void setUp() throws Exception {
-            this.rollingStrategy = SegmentRollingPolicy.ALWAYS_ROLLING;
             this.baseDir = Files.createTempDirectory("test_hdfs").toFile().getAbsoluteFile();
             this.hdfsCluster = HDFSClusterHelpers.createMiniDFSCluster(this.baseDir.getAbsolutePath());
             this.adapterConfig = HDFSStorageConfig

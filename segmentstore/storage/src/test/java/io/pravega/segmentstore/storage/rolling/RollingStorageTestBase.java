@@ -27,7 +27,6 @@ import org.junit.Test;
  */
 public abstract class RollingStorageTestBase extends StorageTestBase {
     protected static final long DEFAULT_ROLLING_SIZE = (int) (APPEND_FORMAT.length() * 1.5);
-    protected SegmentRollingPolicy rollingStrategy = new SegmentRollingPolicy(DEFAULT_ROLLING_SIZE);
 
     @Override
     public void testFencing() throws Exception {
