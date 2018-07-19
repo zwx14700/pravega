@@ -148,7 +148,7 @@ public class NoAppendHDFSStorageTest {
 
             // Get a read handle, which will also fetch the number of chunks for us.
             val readHandle = (RollingSegmentHandle) s.openRead(segmentName).join();
-            Assert.assertEquals("Unexpected number of chunks created.", 32, readHandle.chunks().size());
+            Assert.assertEquals("Unexpected number of chunks created.", 22, readHandle.chunks().size());
             val writtenData = writeStream.toByteArray();
             byte[] readBuffer = new byte[writtenData.length];
             int bytesRead = s.read(readHandle, 0, readBuffer, 0, readBuffer.length, TIMEOUT).join();
@@ -190,7 +190,7 @@ public class NoAppendHDFSStorageTest {
 
             // Get a read handle, which will also fetch the number of chunks for us.
             val readHandle = (RollingSegmentHandle) s.openRead(segmentName).join();
-            Assert.assertEquals("Unexpected number of chunks created.", 5, readHandle.chunks().size());
+            Assert.assertEquals("Unexpected number of chunks created.", 4, readHandle.chunks().size());
         }
 
         /**
