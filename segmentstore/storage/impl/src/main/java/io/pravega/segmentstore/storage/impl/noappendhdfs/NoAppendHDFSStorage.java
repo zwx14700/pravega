@@ -318,7 +318,7 @@ class NoAppendHDFSStorage implements NoAppendSyncStorage {
         try {
             FileStatus[] statusForSegment = findAllStatusForSegment(handle.getSegmentName(), true);
 
-            Arrays.stream(statusForSegment).forEach( (status) -> {
+            Arrays.stream(statusForSegment).forEach(status -> {
                 try {
                     this.fileSystem.delete(status.getPath(), true);
                 } catch (IOException e) {
