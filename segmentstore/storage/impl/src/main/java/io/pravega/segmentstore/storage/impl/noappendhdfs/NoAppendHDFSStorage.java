@@ -436,7 +436,7 @@ class NoAppendHDFSStorage implements NoAppendSyncStorage {
         Path fullPath = getMetaFilePath(streamSegmentName);
         try {
             // Create the file, and then immediately close the returned OutputStream, so that HDFS may properly create the file.
-            this.fileSystem.create(fullPath, READWRITE_PERMISSION, false, 0, this.config.getReplication(),
+            this.fileSystem.create(fullPath, READWRITE_PERMISSION, false, 512, this.config.getReplication(),
                     this.config.getBlockSize(), null).close();
             log.debug("Created '{}'.", fullPath);
         } catch (IOException e) {
@@ -617,9 +617,6 @@ class NoAppendHDFSStorage implements NoAppendSyncStorage {
             throw new StreamSegmentNotExistsException(handle.getSegmentName());
         }
         try (FSDataInputStream stream = this.fileSystem.open(currentFile.getPath())) {
-            if (offset + length > stream.available()) {
-                throw new ArrayIndexOutOfBoundsException();
-            }
             stream.readFully(offset, buffer, bufferOffset, length);
         }
         return length;

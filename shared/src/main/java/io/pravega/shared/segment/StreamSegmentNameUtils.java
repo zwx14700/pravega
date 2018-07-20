@@ -52,12 +52,12 @@ public final class StreamSegmentNameUtils {
     /**
      * This is appended to the end of the Parent Segment Name, then we append a unique identifier.
      */
-    private static final String TRANSACTION_DELIMITER = "#transaction.";
+    private static final String TRANSACTION_DELIMITER = "$transaction.";
 
     /**
      * This is appended to the end of the Primary Segment Name, followed by epoch.
      */
-    private static final String EPOCH_DELIMITER = ".#epoch.";
+    private static final String EPOCH_DELIMITER = ".$epoch.";
 
     /**
      * The Transaction unique identifier is made of two parts, each having a length of 16 bytes (64 bits in Hex).
