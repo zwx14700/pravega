@@ -12,6 +12,7 @@ package io.pravega.segmentstore.server.host;
 import io.pravega.common.io.FileHelpers;
 import io.pravega.segmentstore.server.store.ServiceBuilderConfig;
 import io.pravega.segmentstore.server.store.StreamSegmentStoreTestBase;
+import io.pravega.segmentstore.server.writer.WriterConfig;
 import io.pravega.segmentstore.storage.impl.rocksdb.RocksDBConfig;
 import java.io.File;
 import java.nio.file.Files;
@@ -73,6 +74,7 @@ abstract class BookKeeperIntegrationTestBase extends StreamSegmentStoreTestBase 
     protected ServiceBuilderConfig getBuilderConfig(ServiceBuilderConfig.Builder configBuilder, int instanceId) {
         return configBuilder
                 .makeCopy()
+                .include(WriterConfig.builder().with(WriterConfig.FLUSH_THRESHOLD_BYTES, 64 * 1024 *1024))
                 .include(RocksDBConfig.builder().with(RocksDBConfig.DATABASE_DIR, Paths.get(getRocksDBDir().toString(), Integer.toString(instanceId)).toString()))
                 .build();
     }
